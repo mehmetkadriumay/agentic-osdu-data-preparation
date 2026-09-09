@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, model_validator
 
 from agentic_osdu.domain.models import (
     ActorRef,
@@ -658,6 +658,7 @@ class FileRecordContract(ContractModel):
 class ManifestIndexContract(ContractModel):
     manifest_index_id: UUID
     manifest_ids: tuple[UUID, ...]
+    manifest_documents: tuple[ManifestDocumentRef, ...] = ()
     records: tuple[ManifestRecordRef, ...]
     dataset_references: tuple[DatasetReference, ...]
     component_relationships: tuple[ManifestComponentRelationship, ...]
@@ -681,14 +682,39 @@ class LearnManifestPatternsInput(ContractModel):
     learning_policy_version: SemanticVersion
 
 
+class LearningMaterialSnapshot(ContractModel):
+    """Normalized material retained so category learning remains cumulative."""
+
+    example_id: UUID
+    source_path: WorkspaceRelativePath
+    manifest: ManifestJsonDocument
+
+
 class LearningModelContract(ContractModel):
     learning_model_id: UUID
     category: DataCategory
     version: int = Field(ge=1)
     model_sha256: Sha256
     example_ids: tuple[UUID, ...]
+    example_identities: tuple[LearningExampleRef, ...]
+    material_snapshots: tuple[LearningMaterialSnapshot, ...] = ()
     prototype: ManifestJsonDocument
     constants: tuple[LearningConstant, ...]
+    prototype_source_path: WorkspaceRelativePath
+    file_source_prefix: str = Field(default="", max_length=2048)
+    work_product_envelope: dict[str, JsonValue]
+    component_envelope: dict[str, JsonValue]
+    dataset_envelope: dict[str, JsonValue]
+
+    @model_validator(mode="after")
+    def require_complete_example_identities(self) -> LearningModelContract:
+        if self.example_ids != tuple(item.example_id for item in self.example_identities):
+            raise ValueError("example_ids must exactly match persisted example identities")
+        if self.material_snapshots and self.example_ids != tuple(
+            item.example_id for item in self.material_snapshots
+        ):
+            raise ValueError("material_snapshots must exactly match persisted example identities")
+        return self
 
 
 class LearningConstant(ContractModel):
@@ -734,6 +760,7 @@ class GenerationFilters(ContractModel):
 
 class GenerateAllManifestsInput(ContractModel):
     inventory_id: UUID
+    generation_policy_version: SemanticVersion
     filters: GenerationFilters = Field(default_factory=GenerationFilters)
     continue_on_error: bool = False
     dry_run: bool = True

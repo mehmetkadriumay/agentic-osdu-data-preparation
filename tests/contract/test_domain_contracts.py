@@ -182,7 +182,9 @@ def test_manifest_generation_and_review_contract_invariants() -> None:
     candidate = GeneratedCandidateRef(
         candidate_id=uuid4(),
         source_file_id=association.file_id,
+        source_sha256="a" * 64,
         learning_model_id=uuid4(),
+        model_sha256="d" * 64,
         candidate_sha256="b" * 64,
         proposed_path=WorkspaceRelativePath("generated/example.json"),
     )
@@ -206,7 +208,9 @@ def test_manifest_generation_and_review_contract_invariants() -> None:
         GeneratedCandidateRef(
             candidate_id=uuid4(),
             source_file_id=uuid4(),
+            source_sha256="a" * 64,
             learning_model_id=uuid4(),
+            model_sha256="d" * 64,
             candidate_sha256="c" * 64,
             proposed_path=WorkspaceRelativePath("generated/bad.json"),
             trust_level=TrustLevel.AUTHORITATIVE,

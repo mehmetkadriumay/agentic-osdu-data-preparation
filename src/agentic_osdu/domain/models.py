@@ -711,7 +711,9 @@ class LearningModelVersionRef(ContractModel):
 class GeneratedCandidateRef(ContractModel):
     candidate_id: UUID
     source_file_id: FileId
+    source_sha256: Sha256
     learning_model_id: UUID
+    model_sha256: Sha256
     candidate_sha256: Sha256
     proposed_path: WorkspaceRelativePath
     generation_status: GenerationStatus = GenerationStatus.PROPOSED

@@ -252,7 +252,9 @@ def test_learning_generation_review_and_inventory_contracts_are_end_to_end() -> 
     candidate_ref = GeneratedCandidateRef(
         candidate_id=uuid4(),
         source_file_id=example.source_file_id,
+        source_sha256=example.source_sha256,
         learning_model_id=uuid4(),
+        model_sha256="d" * 64,
         candidate_sha256="c" * 64,
         proposed_path=WorkspaceRelativePath("generated/candidate.json"),
     )
