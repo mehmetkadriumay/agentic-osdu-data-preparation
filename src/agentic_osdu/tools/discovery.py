@@ -7,12 +7,14 @@ import fnmatch
 import json
 import os
 from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path, PurePosixPath
 from threading import Event, Lock
-from typing import Protocol
+from typing import BinaryIO, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from agentic_osdu.domain.models import FileAssetRef, FileSampleRef, WorkspaceRelativePath
@@ -100,6 +102,28 @@ class _FileState:
     asset: FileAssetRef
     canonical_path: str
     signature: tuple[int, int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredFormatSource:
+    """Read-only format-parser capability backed by a discovered fingerprint."""
+
+    file_id: UUID
+    _service: DiscoveryService
+
+    @property
+    def size_bytes(self) -> int:
+        return self._service._validated_file_state(self.file_id).asset.size_bytes
+
+    @property
+    def relative_path(self) -> WorkspaceRelativePath:
+        return self._service._validated_file_state(self.file_id).asset.relative_path
+
+    def open_binary(self, *, max_bytes: int | None = None) -> AbstractContextManager[BinaryIO]:
+        return self._service._open_discovered_binary(self.file_id, max_bytes=max_bytes)
+
+    def open_native(self) -> AbstractContextManager[object]:
+        return self._service._open_discovered_native(self.file_id)
 
 
 class DiscoveryService:
@@ -336,6 +360,109 @@ class DiscoveryService:
             text_encoding=encoding,
             truncated=offset + len(content) < state.asset.size_bytes,
         )
+
+    def format_source(self, file_id: UUID) -> DiscoveredFormatSource:
+        """Resolve a file ID to a read-only parser capability after fingerprint validation."""
+
+        self._validated_file_state(file_id)
+        return DiscoveredFormatSource(file_id=file_id, _service=self)
+
+    def _validated_file_state(self, file_id: UUID) -> _FileState:
+        with self._lock:
+            state = self._files.get(file_id)
+        if state is None:
+            raise DiscoveryError("FILE_NOT_FOUND", "The file was not discovered.")
+        workspace = self._store.get(state.asset.workspace_id)
+        if workspace is None:
+            raise DiscoveryError("ROOT_POLICY_DENIED", "The file workspace is no longer approved.")
+        try:
+            authorized = self._path_policy.authorize_child(
+                workspace.canonical_root.root,
+                state.asset.relative_path.root,
+                follow_links=False,
+            )
+            current = os.stat(authorized.canonical_path, follow_symlinks=False)
+        except (OSError, PolicyViolation) as error:
+            raise DiscoveryError(
+                "FILE_CHANGED", "The file cannot be matched to its discovery fingerprint."
+            ) from error
+        if (
+            authorized.canonical_path != state.canonical_path
+            or self._signature(current) != state.signature
+        ):
+            raise DiscoveryError("FILE_CHANGED", "The file changed after discovery.")
+        return state
+
+    @contextmanager
+    def _open_discovered_binary(
+        self,
+        file_id: UUID,
+        *,
+        max_bytes: int | None,
+    ) -> Iterator[BinaryIO]:
+        state = self._validated_file_state(file_id)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = -1
+        try:
+            descriptor = os.open(state.canonical_path, flags)
+            opened = os.fstat(descriptor)
+            if self._signature(opened) != state.signature:
+                raise DiscoveryError("FILE_CHANGED", "The file changed before parser access.")
+            with os.fdopen(descriptor, "rb", closefd=True) as stream:
+                descriptor = -1
+                if max_bytes is None:
+                    yield stream
+                else:
+                    yield BytesIO(stream.read(max_bytes))
+        except DiscoveryError:
+            raise
+        except OSError as error:
+            raise DiscoveryError("IO_READ_FAILED", "The parser file read failed.") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        self._validated_file_state(file_id)
+
+    @contextmanager
+    def _open_discovered_native(self, file_id: UUID) -> Iterator[object]:
+        """Hold the discovered inode while a native parser uses a supported locator."""
+
+        state = self._validated_file_state(file_id)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = -1
+        try:
+            descriptor = os.open(state.canonical_path, flags)
+            if self._signature(os.fstat(descriptor)) != state.signature:
+                raise DiscoveryError(
+                    "FILE_CHANGED", "The file changed before native parser access."
+                )
+            if os.name == "nt":
+                # Windows' default sharing mode prevents replacement while this handle is held.
+                locator: object = state.canonical_path
+            else:
+                descriptor_paths = (
+                    f"/proc/self/fd/{descriptor}",
+                    f"/dev/fd/{descriptor}",
+                )
+                locator = next((path for path in descriptor_paths if os.path.exists(path)), None)
+                if locator is None:
+                    raise DiscoveryError(
+                        "IO_READ_FAILED",
+                        "This platform cannot provide a stable native-parser locator.",
+                    )
+            yield locator
+            if self._signature(os.fstat(descriptor)) != state.signature:
+                raise DiscoveryError(
+                    "FILE_CHANGED", "The file changed during native parser access."
+                )
+        except DiscoveryError:
+            raise
+        except OSError as error:
+            raise DiscoveryError("IO_READ_FAILED", "The native parser file open failed.") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        self._validated_file_state(file_id)
 
     def _include_roots(
         self,

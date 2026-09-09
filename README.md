@@ -5,11 +5,12 @@ preparation workflows.
 
 ## Status
 
-EPIC-003 provides approved workspace registration, deterministic no-follow
+EPIC-004 provides approved workspace registration, deterministic no-follow
 file discovery, bounded reads with change detection, versioned format
-detection, and normalized parser-free classification through `TOOL-001`
-through `TOOL-005`. Format-specific metadata extraction, persistence, APIs,
-agents, jobs, and user interfaces remain deferred to later approved epics.
+detection, normalized parser-free classification, and bounded typed metadata
+extraction for SEG-Y, LAS, JSON Well Log, DLIS, LIS/LTI, CSV, P1/90, SGP, DAT,
+text, and PDF through `TOOL-001` through `TOOL-013`. Persistence, APIs, agents,
+jobs, and user interfaces remain deferred to later approved epics.
 
 ## Requirements
 

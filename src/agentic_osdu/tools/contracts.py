@@ -273,6 +273,7 @@ class SegyBinaryHeader(ContractModel):
     data_traces_per_ensemble: int | None = Field(default=None, ge=0)
     auxiliary_traces_per_ensemble: int | None = Field(default=None, ge=0)
     sample_format_code: int | None = Field(default=None, ge=0)
+    fixed_length_trace_flag: int | None = Field(default=None, ge=0, le=1)
 
 
 class SegySurveyMetadata(ContractModel):
@@ -345,12 +346,24 @@ class JsonCurveMetadata(ContractModel):
     value_type: str | None = Field(default=None, max_length=64)
 
 
+class JsonLogSetMetadata(ContractModel):
+    name: str = Field(min_length=1, max_length=256)
+    well_name: str | None = Field(default=None, max_length=256)
+    curves: tuple[JsonCurveMetadata, ...]
+    row_count: int = Field(ge=0)
+    column_count: int = Field(ge=0)
+    index_curve: str | None = Field(default=None, max_length=256)
+    data_uri: str | None = Field(default=None, min_length=1, max_length=2048)
+
+
 class JsonWellLogMetadata(ContractModel):
     well_name: str | None = Field(default=None, max_length=256)
     curves: tuple[JsonCurveMetadata, ...]
     row_count: int = Field(ge=0)
     column_count: int = Field(ge=0)
     index_curve: str | None = Field(default=None, max_length=256)
+    log_set_count: int = Field(default=1, ge=1)
+    log_sets: tuple[JsonLogSetMetadata, ...] = ()
 
 
 class DlisExtractionOptions(ContractModel):
@@ -448,6 +461,9 @@ class NavigationPosition(ContractModel):
     point_number: int = Field(ge=0)
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+    easting: float | None = None
+    northing: float | None = None
+    water_depth: float | None = None
 
 
 class P190HeaderField(ContractModel):
@@ -461,6 +477,13 @@ class P190LineSummary(ContractModel):
     position_count: int = Field(ge=0)
     first_point_number: int | None = Field(default=None, ge=0)
     last_point_number: int | None = Field(default=None, ge=0)
+    point_increment: int | None = None
+    easting_min: float | None = None
+    easting_max: float | None = None
+    northing_min: float | None = None
+    northing_max: float | None = None
+    water_depth_min: float | None = None
+    water_depth_max: float | None = None
 
 
 class P190Metadata(ContractModel):
@@ -490,12 +513,16 @@ class SgpMetadata(ContractModel):
     row_count: int = Field(ge=0)
     column_count: int = Field(ge=0)
     domain: DataDomain
+    sampled_row_count: int = Field(default=0, ge=0)
+    truncated: bool = False
 
 
 class DatMetadata(ContractModel):
     interpretation_type: str = Field(pattern=r"^(?:horizon|fault|unknown)$")
     point_count: int = Field(ge=0)
     crs: str | None = Field(default=None, max_length=128)
+    sampled_point_count: int = Field(default=0, ge=0)
+    truncated: bool = False
 
 
 class TextMetadata(ContractModel):

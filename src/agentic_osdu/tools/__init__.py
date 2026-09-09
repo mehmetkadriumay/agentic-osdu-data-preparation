@@ -1,4 +1,4 @@
-"""Typed deterministic-tool contracts and approved TOOL-001..005 implementations."""
+"""Typed deterministic-tool contracts and approved TOOL-001..013 implementations."""
 
 from agentic_osdu.tools.contracts import (
     TOOL_REGISTRY,
