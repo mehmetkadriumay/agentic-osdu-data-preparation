@@ -5,8 +5,10 @@ preparation workflows.
 
 ## Status
 
-This repository currently contains only the EPIC-001 project bootstrap. Domain
-tools, orchestration, APIs, persistence, and user interfaces are intentionally
+EPIC-002 provides immutable domain contracts, a typed catalog for
+`TOOL-001` through `TOOL-030`, fail-closed local policy foundations, and
+bounded observability interfaces. The catalog contains contracts only:
+discovery, parsing, persistence, APIs, agents, jobs, and user interfaces remain
 deferred to later approved epics.
 
 ## Requirements
@@ -16,7 +18,24 @@ deferred to later approved epics.
 ## Development install
 
 ```powershell
-python -m pip install -e .
+uv sync --python 3.12
+```
+
+## Local quality gates
+
+Run the CI-ready checks from the repository root:
+
+```powershell
+uv run --frozen pytest
+uv run --frozen ruff format --check .
+uv run --frozen ruff check .
+uv run --frozen mypy
+uv build
+uv run --frozen twine check dist/*
+uv run --frozen bandit -c pyproject.toml -r src
+uv run --frozen pip-audit
+uv lock --check
+uv run --frozen pre-commit run --all-files
 ```
 
 ## Scope
