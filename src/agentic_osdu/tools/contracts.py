@@ -776,7 +776,7 @@ class GenerationBatchResult(ContractModel):
 
 
 class ValidateSchemasInput(ContractModel):
-    manifest: ManifestDocumentRef | GeneratedManifestCandidate
+    manifest: ParsedManifest | GeneratedManifestCandidate
     schema_catalog_id: UUID
     max_errors: int = Field(default=100, ge=1, le=10_000)
 
@@ -785,17 +785,25 @@ class ValidationIssue(ContractModel):
     code: str = Field(min_length=1, max_length=128, pattern=r"^[A-Z][A-Z0-9_]*$")
     json_pointer: str = Field(max_length=2048)
     message: str = Field(min_length=1, max_length=1024)
+    scope: str = Field(min_length=1, max_length=512)
+    kind: OSDUKind | None = None
+    validator: str | None = Field(default=None, max_length=128)
     schema_uri: str | None = Field(default=None, max_length=2048)
 
 
 class ValidationReport(ContractModel):
     status: ValidationStatus
+    schema_conformant: bool | None
+    semantic_correctness: Literal["not_assessed"] = "not_assessed"
     schema_catalog_id: UUID
     schema_revision: str = Field(min_length=1, max_length=256)
     catalog_sha256: Sha256
+    catalog_source: str = Field(min_length=1, max_length=512)
     document_kind: OSDUKind | None
     issues: tuple[ValidationIssue, ...]
     validated_record_count: int = Field(ge=0)
+    validated_schemas: tuple[str, ...] = ()
+    errors_truncated: bool = False
 
 
 class SchemaChecksum(ContractModel):

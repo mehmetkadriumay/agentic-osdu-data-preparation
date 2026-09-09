@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_epic_005_does_not_create_later_architectural_packages_or_ci() -> None:
+def test_epic_006_does_not_create_later_architectural_packages_or_ci() -> None:
     root = Path(__file__).parents[2]
     prohibited = (
         ".github/workflows",
@@ -11,7 +11,6 @@ def test_epic_005_does_not_create_later_architectural_packages_or_ci() -> None:
         "src/agentic_osdu/api",
         "src/agentic_osdu/jobs",
         "src/agentic_osdu/migration",
-        "src/agentic_osdu/schemas",
         "src/agentic_osdu/state",
         "web",
         "migrations",
@@ -19,9 +18,13 @@ def test_epic_005_does_not_create_later_architectural_packages_or_ci() -> None:
     assert all(not (root / path).exists() for path in prohibited)
 
 
-def test_epic_002_contains_no_osdu_ingestion_or_implicit_network_code() -> None:
+def test_epic_006_contains_no_osdu_ingestion_or_unscoped_network_code() -> None:
     root = Path(__file__).parents[2]
-    package_files = (root / "src" / "agentic_osdu").rglob("*.py")
+    package_files = (
+        path
+        for path in (root / "src" / "agentic_osdu").rglob("*.py")
+        if path.as_posix().endswith("/schemas/catalog.py") is False
+    )
     source = "\n".join(path.read_text(encoding="utf-8") for path in package_files).lower()
     prohibited_imports = (
         "import requests",
