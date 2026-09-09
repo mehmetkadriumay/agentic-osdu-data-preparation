@@ -5,11 +5,11 @@ preparation workflows.
 
 ## Status
 
-EPIC-002 provides immutable domain contracts, a typed catalog for
-`TOOL-001` through `TOOL-030`, fail-closed local policy foundations, and
-bounded observability interfaces. The catalog contains contracts only:
-discovery, parsing, persistence, APIs, agents, jobs, and user interfaces remain
-deferred to later approved epics.
+EPIC-003 provides approved workspace registration, deterministic no-follow
+file discovery, bounded reads with change detection, versioned format
+detection, and normalized parser-free classification through `TOOL-001`
+through `TOOL-005`. Format-specific metadata extraction, persistence, APIs,
+agents, jobs, and user interfaces remain deferred to later approved epics.
 
 ## Requirements
 

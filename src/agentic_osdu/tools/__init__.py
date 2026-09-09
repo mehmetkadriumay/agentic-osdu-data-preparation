@@ -1,7 +1,4 @@
-"""Typed deterministic-tool contracts.
-
-Tool implementations are intentionally deferred to later approved epics.
-"""
+"""Typed deterministic-tool contracts and approved TOOL-001..005 implementations."""
 
 from agentic_osdu.tools.contracts import (
     TOOL_REGISTRY,

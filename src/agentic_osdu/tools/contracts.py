@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -228,6 +229,11 @@ class FileSampleOutput(ContractModel):
     content_base64: str = Field(min_length=1, max_length=24 * 1024 * 1024)
     text_encoding: str | None = Field(default=None, max_length=64)
     truncated: bool
+
+    def decoded_bytes(self) -> bytes:
+        """Decode the bounded transport representation."""
+
+        return base64.b64decode(self.content_base64, validate=True)
 
 
 class DetectFormatInput(ContractModel):
