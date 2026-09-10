@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
-def test_epic_010_does_not_create_release_ci_before_human_parity_signoff() -> None:
+def test_release_ci_exists_only_after_recorded_human_parity_signoff() -> None:
     root = Path(__file__).parents[2]
-    prohibited = (".github/workflows",)
-    assert all(not (root / path).exists() for path in prohibited)
+    report = json.loads((root / "docs/parity-report.json").read_text(encoding="utf-8"))
+
+    assert report["acceptance"]["human_sign_off"]["approved"] is True
+    assert report["acceptance"]["human_sign_off"]["comment"] == "authorized, all good"
+    assert (root / ".github/workflows/ci.yml").is_file()
 
 
 def test_epic_009_contains_no_osdu_ingestion_or_unscoped_network_code() -> None:

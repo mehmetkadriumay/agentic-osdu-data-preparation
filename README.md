@@ -5,12 +5,10 @@ preparation workflows.
 
 ## Status
 
-EPIC-004 provides approved workspace registration, deterministic no-follow
-file discovery, bounded reads with change detection, versioned format
-detection, normalized parser-free classification, and bounded typed metadata
-extraction for SEG-Y, LAS, JSON Well Log, DLIS, LIS/LTI, CSV, P1/90, SGP, DAT,
-text, and PDF through `TOOL-001` through `TOOL-013`. Persistence, APIs, agents,
-jobs, and user interfaces remain deferred to later approved epics.
+Version 1.0 provides the approved deterministic tools, bounded agent workflows,
+transactional state and jobs, migration and parity validation, typed API and
+CLI, and local review UI. The final parity report contains 88 comparisons:
+85 equal, 3 intentional approved differences, and 0 blocking differences.
 
 ## Requirements
 
@@ -20,6 +18,14 @@ jobs, and user interfaces remain deferred to later approved epics.
 
 ```powershell
 uv sync --python 3.12
+```
+
+Install a release wheel and verify the CLI:
+
+```powershell
+uv tool install .\dist\agentic_osdu_data_preparation-1.0.0-py3-none-any.whl
+agentic-osdu --help
+agentic-osdu web-serve --host 127.0.0.1 --port 8000
 ```
 
 ## Local quality gates
@@ -37,7 +43,17 @@ uv run --frozen bandit -c pyproject.toml -r src
 uv run --frozen pip-audit
 uv lock --check
 uv run --frozen pre-commit run --all-files
+Set-Location web
+npm ci
+npm run typecheck
+npm run lint
+npm test
+npm run build
+npm run test:e2e
 ```
+
+See [operations](docs/operations.md), [release policy](docs/release-policy.md),
+and the [approved parity report](docs/parity-report.json).
 
 ## Scope
 

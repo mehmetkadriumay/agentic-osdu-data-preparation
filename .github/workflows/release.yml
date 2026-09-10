@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish approved release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+      - name: Verify protected main and required CI checks
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Release commit is not on main" }
+          $response = gh api "repos/${{ github.repository }}/commits/$env:GITHUB_SHA/check-runs"
+          $checks = ($response | ConvertFrom-Json).check_runs
+          $required = @(
+            "Python quality",
+            "Python tests and coverage",
+            "Security scans",
+            "Fixture parity",
+            "UI quality and Playwright",
+            "Package and clean install",
+            "Rollback rehearsals"
+          )
+          foreach ($name in $required) {
+            $passed = $checks | Where-Object {
+              $_.name -eq $name -and $_.conclusion -eq "success"
+            }
+            if (-not $passed) { throw "Required check did not pass: $name" }
+          }
+      - run: uv sync --frozen
+      - shell: pwsh
+        run: |
+          $version = (uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag does not match project version" }
+      - run: uv build
+      - run: uv run twine check dist/*
+      - shell: pwsh
+        run: ./scripts/verify_clean_install.ps1 -Wheel (Get-ChildItem dist/*.whl).FullName
+      - shell: pwsh
+        run: Compress-Archive -Path migrations,alembic.ini -DestinationPath dist/migration-package.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            uv.lock
+            docs/schema-catalog-manifest.json
+            dist/migration-package.zip
+            docs/parity-report.json

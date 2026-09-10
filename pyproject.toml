@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentic-osdu-data-preparation"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local-first agentic tools for preparing OSDU data."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -31,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 agentic-osdu = "agentic_osdu.cli:entrypoint"
+agentic-osdu-operations = "agentic_osdu.operations:entrypoint"
 
 [project.urls]
 Homepage = "https://github.com/mehmetkadriumay/agentic-osdu-data-preparation"

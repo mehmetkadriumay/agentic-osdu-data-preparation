@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  python-quality:
+    name: Python quality
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy
+      - run: uv run pre-commit run --all-files
+
+  python-tests:
+    name: Python tests and coverage
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest --ignore=tests/parity --ignore=tests/integration/rollback
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data
+          path: .coverage
+          include-hidden-files: true
+
+  security:
+    name: Security scans
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: uv sync --frozen
+      - run: uv run bandit -c pyproject.toml -r src
+      - run: uv run pip-audit
+      - working-directory: web
+        run: npm ci
+      - working-directory: web
+        run: npm audit --audit-level=high
+
+  parity:
+    name: Fixture parity
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: AgenticOSDUDataPreparation
+      - uses: actions/checkout@v4
+        with:
+          repository: mehmetkadriumay/OSDUDataPreparationTool
+          path: Volve
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+      - working-directory: AgenticOSDUDataPreparation
+        run: uv sync --frozen
+      - working-directory: AgenticOSDUDataPreparation
+        run: uv run pytest tests/parity --no-cov
+
+  ui:
+    name: UI quality and Playwright
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - working-directory: web
+        run: npm ci
+      - working-directory: web
+        run: npm run typecheck
+      - working-directory: web
+        run: npm run lint
+      - working-directory: web
+        run: npm test
+      - working-directory: web
+        run: npm run build
+      - working-directory: web
+        run: npx playwright install --with-deps chromium
+      - working-directory: web
+        run: npm run test:e2e
+
+  package:
+    name: Package and clean install
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv lock --check
+      - run: uv build
+      - run: uv run twine check dist/*
+      - shell: pwsh
+        run: ./scripts/verify_clean_install.ps1 -Wheel (Get-ChildItem dist/*.whl).FullName
+      - shell: pwsh
+        run: Compress-Archive -Path migrations,alembic.ini -DestinationPath dist/migration-package.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate
+          path: |
+            dist/*
+            uv.lock
+            dist/migration-package.zip
+            docs/parity-report.json
+            docs/schema-catalog-manifest.json
+
+  rollback:
+    name: Rollback rehearsals
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest tests/integration/rollback --no-cov
+      - run: uv build
+      - shell: pwsh
+        run: ./scripts/rehearse_package_rollback.ps1 -CurrentWheel (Get-ChildItem dist/*.whl).FullName

@@ -9,10 +9,10 @@ from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from agentic_osdu.api.app import bundled_web_directory, create_app
 from agentic_osdu.domain.models import (
@@ -104,12 +104,22 @@ class ParitySummary(BaseModel):
     blocking: int
 
 
+class HumanParitySignOff(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    approved: Literal[True]
+    comment: str
+    recorded_at: datetime
+    source_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class AcceptanceStatus(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     ac_014_automated_passed: bool
     ready_for_human_sign_off: bool
-    human_sign_off: str = "pending"
+    human_sign_off: Literal["pending"] | HumanParitySignOff = "pending"
 
 
 class ParityReport(BaseModel):
@@ -121,6 +131,37 @@ class ParityReport(BaseModel):
     comparisons: tuple[Comparison, ...]
     summary: ParitySummary
     acceptance: AcceptanceStatus
+
+
+def sign_off_parity_report(
+    report: ParityReport,
+    *,
+    comment: str,
+    recorded_at: datetime,
+    source_commit: str,
+) -> ParityReport:
+    if report.summary.blocking != 0 or not report.acceptance.ac_014_automated_passed:
+        raise ValueError("A blocking parity report cannot be signed off.")
+    if report.acceptance.human_sign_off != "pending":
+        raise ValueError("The parity report is already signed off.")
+    canonical = report.model_dump_json(exclude_none=False)
+    sign_off = HumanParitySignOff(
+        approved=True,
+        comment=comment,
+        recorded_at=recorded_at,
+        source_commit=source_commit,
+        report_sha256=sha256(canonical.encode()).hexdigest(),
+    )
+    return report.model_copy(
+        update={
+            "acceptance": report.acceptance.model_copy(
+                update={
+                    "ready_for_human_sign_off": False,
+                    "human_sign_off": sign_off,
+                }
+            )
+        }
+    )
 
 
 _PRD_APPROVED_ADDITIONS = {

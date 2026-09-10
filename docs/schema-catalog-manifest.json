@@ -1,0 +1,7 @@
+{
+  "bundled_catalog": false,
+  "catalog_revision": null,
+  "network_access_default": "disabled",
+  "schemas": [],
+  "statement": "No OSDU schema catalog is bundled. Import a checksum-pinned approved catalog explicitly."
+}

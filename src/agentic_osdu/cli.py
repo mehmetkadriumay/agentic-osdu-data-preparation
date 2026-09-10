@@ -82,7 +82,12 @@ def _http_transport(base_url: str) -> Transport:
 def main(argv: Sequence[str] | None = None, *, transport: Transport | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
-    except (ValueError, SystemExit) as error:
+    except SystemExit as error:
+        if error.code == 0:
+            return 0
+        print(json.dumps({"errors": [{"code": "CLI_USAGE_ERROR", "message": str(error)}]}))
+        return 2
+    except ValueError as error:
         print(json.dumps({"errors": [{"code": "CLI_USAGE_ERROR", "message": str(error)}]}))
         return 2
     if args.command == "web-serve":

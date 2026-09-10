@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from tests.parity.current_harness import characterize_current_application
 from tests.parity.fixtures import catalog_sha256, load_catalog, materialize_catalog
 from tests.parity.report import (
     DifferenceClassification,
+    ParityReport,
     build_parity_report,
     characterize_target_application,
+    sign_off_parity_report,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -170,13 +173,30 @@ def test_item_052_generated_report_is_current_and_has_no_unexplained_capability_
     current = characterize_current_application(CATALOG, VOLVE_ROOT, tmp_path / "current")
     target = characterize_target_application(CATALOG, tmp_path / "target")
     reproduced = build_parity_report(current, target).model_dump(mode="json")
+    signed = sign_off_parity_report(
+        build_parity_report(current, target),
+        comment="authorized, all good",
+        recorded_at=datetime.fromisoformat("2026-09-10T13:35:13.078-07:00"),
+        source_commit="51702e705968dc63b3b2bc160ed66ee182bf9bfc",
+    )
+    sign_off = signed.acceptance.human_sign_off
+    assert not isinstance(sign_off, str)
 
-    assert report == reproduced
+    assert ParityReport.model_validate(report) == signed
+    assert report["comparisons"] == reproduced["comparisons"]
+    assert report["fixture_results"] == reproduced["fixture_results"]
+    assert report["summary"] == reproduced["summary"]
     assert report["fixture_catalog_sha256"] == catalog_sha256(CATALOG)
     assert report["summary"]["blocking"] == 0
     assert report["acceptance"]["ac_014_automated_passed"] is True
-    assert report["acceptance"]["human_sign_off"] == "pending"
-    assert report["acceptance"]["ready_for_human_sign_off"] is True
+    assert report["acceptance"]["human_sign_off"] == {
+        "approved": True,
+        "comment": "authorized, all good",
+        "recorded_at": "2026-09-10T13:35:13.078-07:00",
+        "report_sha256": sign_off.report_sha256,
+        "source_commit": "51702e705968dc63b3b2bc160ed66ee182bf9bfc",
+    }
+    assert report["acceptance"]["ready_for_human_sign_off"] is False
     assert {item["format_id"] for item in report["fixture_results"]} == {
         f"FMT-{number:03d}" for number in range(1, 14)
     }

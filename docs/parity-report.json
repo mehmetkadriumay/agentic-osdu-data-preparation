@@ -1,8 +1,14 @@
 {
   "acceptance": {
     "ac_014_automated_passed": true,
-    "human_sign_off": "pending",
-    "ready_for_human_sign_off": true
+    "human_sign_off": {
+      "approved": true,
+      "comment": "authorized, all good",
+      "recorded_at": "2026-09-10T13:35:13.078-07:00",
+      "report_sha256": "808bd4cd4da29d74af6372731041cd12f728662a8a1af64a7e656e08fe66e019",
+      "source_commit": "51702e705968dc63b3b2bc160ed66ee182bf9bfc"
+    },
+    "ready_for_human_sign_off": false
   },
   "comparisons": [
     {
@@ -159,9 +165,9 @@
     {
       "approval": null,
       "classification": "equal",
-      "current": "caaacbe13f1d3bb66961c39a39ff27522ddc2afada3083cbc4549b2e4743d164",
+      "current": "9df457f4adec77b4f6e4ef37c59c9671d0b9b0aa3663b7eb7bd6f4827837ee3e",
       "key": "fixture_catalog_sha256",
-      "target": "caaacbe13f1d3bb66961c39a39ff27522ddc2afada3083cbc4549b2e4743d164"
+      "target": "9df457f4adec77b4f6e4ef37c59c9671d0b9b0aa3663b7eb7bd6f4827837ee3e"
     },
     {
       "approval": null,
@@ -663,7 +669,7 @@
       "target": "work-product-component/WellLog.1.1.0.json"
     }
   ],
-  "fixture_catalog_sha256": "caaacbe13f1d3bb66961c39a39ff27522ddc2afada3083cbc4549b2e4743d164",
+  "fixture_catalog_sha256": "9df457f4adec77b4f6e4ef37c59c9671d0b9b0aa3663b7eb7bd6f4827837ee3e",
   "fixture_results": [
     {
       "current_status": "supported",
