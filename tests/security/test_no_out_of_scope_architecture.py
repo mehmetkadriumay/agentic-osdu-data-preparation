@@ -3,12 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_epic_009_does_not_create_later_architectural_packages_or_ci() -> None:
+def test_epic_010_does_not_create_release_ci_before_human_parity_signoff() -> None:
     root = Path(__file__).parents[2]
-    prohibited = (
-        ".github/workflows",
-        "src/agentic_osdu/migration",
-    )
+    prohibited = (".github/workflows",)
     assert all(not (root / path).exists() for path in prohibited)
 
 

@@ -1,0 +1,754 @@
+{
+  "acceptance": {
+    "ac_014_automated_passed": true,
+    "human_sign_off": "pending",
+    "ready_for_human_sign_off": true
+  },
+  "comparisons": [
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "api_shapes.generation",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "api_shapes.inventory",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "api_shapes.jobs",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "api_shapes.learning",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "api_shapes.manifests",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": [
+        "exact_dataset_path",
+        "exact_path",
+        "exact_dataset_filename",
+        "exact_filename",
+        "normalized_identifier"
+      ],
+      "key": "associations.methods",
+      "target": [
+        "exact_dataset_path",
+        "exact_path",
+        "exact_dataset_filename",
+        "exact_filename",
+        "normalized_identifier"
+      ]
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": false,
+      "key": "capabilities.osdu_ingestion",
+      "target": false
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.bulk_generation",
+      "target": true
+    },
+    {
+      "approval": {
+        "approval_id": "FR-011",
+        "reason": "The approved target adds cooperative cancellation absent from the current UI."
+      },
+      "classification": "intentional-approved",
+      "current": null,
+      "key": "capabilities.ui.cancellation",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.classification",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.clear_inventory",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.clear_learning",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.details_and_evidence",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.filtering",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.learning",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.manifest_view_and_copy",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.progress",
+      "target": true
+    },
+    {
+      "approval": {
+        "approval_id": "FR-017",
+        "reason": "The approved target adds explicit provenance and trust displays."
+      },
+      "classification": "intentional-approved",
+      "current": null,
+      "key": "capabilities.ui.provenance_and_trust",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "capabilities.ui.single_generation",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "caaacbe13f1d3bb66961c39a39ff27522ddc2afada3083cbc4549b2e4743d164",
+      "key": "fixture_catalog_sha256",
+      "target": "caaacbe13f1d3bb66961c39a39ff27522ddc2afada3083cbc4549b2e4743d164"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-001",
+      "key": "formats.FMT-001.detected_format_id",
+      "target": "FMT-001"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-001.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-002",
+      "key": "formats.FMT-002.detected_format_id",
+      "target": "FMT-002"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-002.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-003",
+      "key": "formats.FMT-003.detected_format_id",
+      "target": "FMT-003"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-003.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-004",
+      "key": "formats.FMT-004.detected_format_id",
+      "target": "FMT-004"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "signature-only",
+      "key": "formats.FMT-004.status",
+      "target": "signature-only"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-005",
+      "key": "formats.FMT-005.detected_format_id",
+      "target": "FMT-005"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "signature-only",
+      "key": "formats.FMT-005.status",
+      "target": "signature-only"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-006",
+      "key": "formats.FMT-006.detected_format_id",
+      "target": "FMT-006"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-006.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-007",
+      "key": "formats.FMT-007.detected_format_id",
+      "target": "FMT-007"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-007.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-008",
+      "key": "formats.FMT-008.detected_format_id",
+      "target": "FMT-008"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-008.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-009",
+      "key": "formats.FMT-009.detected_format_id",
+      "target": "FMT-009"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-009.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-010",
+      "key": "formats.FMT-010.detected_format_id",
+      "target": "FMT-010"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-010.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-011",
+      "key": "formats.FMT-011.detected_format_id",
+      "target": "FMT-011"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-011.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-012",
+      "key": "formats.FMT-012.detected_format_id",
+      "target": "FMT-012"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-012.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "FMT-013",
+      "key": "formats.FMT-013.detected_format_id",
+      "target": "FMT-013"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "supported",
+      "key": "formats.FMT-013.status",
+      "target": "supported"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "generation.deterministic_path",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "generation.no_overwrite",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "learning.generated_examples_rejected",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-001.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 1,
+      "key": "metadata.FMT-001.record_count",
+      "target": 1
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 5,
+      "key": "metadata.FMT-001.sample_format_code",
+      "target": 5
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 2000,
+      "key": "metadata.FMT-001.sample_interval",
+      "target": 2000
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 2,
+      "key": "metadata.FMT-001.samples_per_trace",
+      "target": 2
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": [
+        "DEPT",
+        "GR"
+      ],
+      "key": "metadata.FMT-002.curve_names",
+      "target": [
+        "DEPT",
+        "GR"
+      ]
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-002.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": [
+        "DEPT"
+      ],
+      "key": "metadata.FMT-003.curve_names",
+      "target": [
+        "DEPT"
+      ]
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-003.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 1,
+      "key": "metadata.FMT-003.record_count",
+      "target": 1
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "Volve F-1",
+      "key": "metadata.FMT-003.well_name",
+      "target": "Volve F-1"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "unsupported-signature-only",
+      "key": "metadata.FMT-004.observation_depth",
+      "target": "unsupported-signature-only"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "metadata.FMT-004.signature_valid",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "unsupported-signature-only",
+      "key": "metadata.FMT-005.observation_depth",
+      "target": "unsupported-signature-only"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "metadata.FMT-005.signature_valid",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 2,
+      "key": "metadata.FMT-006.column_count",
+      "target": 2
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": [
+        "MD",
+        "GR"
+      ],
+      "key": "metadata.FMT-006.column_names",
+      "target": [
+        "MD",
+        "GR"
+      ]
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-006.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 2,
+      "key": "metadata.FMT-006.record_count",
+      "target": 2
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 32631,
+      "key": "metadata.FMT-007.epsg",
+      "target": 32631
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": [
+        "VOLVE-LINE"
+      ],
+      "key": "metadata.FMT-007.line_names",
+      "target": [
+        "VOLVE-LINE"
+      ]
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-007.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 1,
+      "key": "metadata.FMT-007.record_count",
+      "target": 1
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 2,
+      "key": "metadata.FMT-008.column_count",
+      "target": 2
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-008.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 2,
+      "key": "metadata.FMT-008.record_count",
+      "target": 2
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "structured-error",
+      "key": "metadata.FMT-009.observation_depth",
+      "target": "structured-error"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-010.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 2,
+      "key": "metadata.FMT-010.record_count",
+      "target": 2
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-011.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "metadata.FMT-011.signature_valid",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": 29,
+      "key": "metadata.FMT-011.size_bytes",
+      "target": 29
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "osdu:wks:Manifest:1.0.0",
+      "key": "metadata.FMT-012.document_kind",
+      "target": "osdu:wks:Manifest:1.0.0"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-012.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "extracted",
+      "key": "metadata.FMT-013.observation_depth",
+      "target": "extracted"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "work-product-component/WellLog.1.1.0.json",
+      "key": "metadata.FMT-013.schema_path",
+      "target": "work-product-component/WellLog.1.1.0.json"
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": true,
+      "key": "source_unchanged",
+      "target": true
+    },
+    {
+      "approval": {
+        "approval_id": "SEC-003",
+        "reason": "The approved target disables implicit schema network access."
+      },
+      "classification": "intentional-approved",
+      "current": false,
+      "key": "validation.implicit_network_disabled",
+      "target": true
+    },
+    {
+      "approval": null,
+      "classification": "equal",
+      "current": "work-product-component/WellLog.1.1.0.json",
+      "key": "validation.kind_mapping",
+      "target": "work-product-component/WellLog.1.1.0.json"
+    }
+  ],
+  "fixture_catalog_sha256": "caaacbe13f1d3bb66961c39a39ff27522ddc2afada3083cbc4549b2e4743d164",
+  "fixture_results": [
+    {
+      "current_status": "supported",
+      "fixture_id": "segy-minimal",
+      "format_id": "FMT-001",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "las-minimal",
+      "format_id": "FMT-002",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "json-well-log-minimal",
+      "format_id": "FMT-003",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "signature-only",
+      "fixture_id": "dlis-signature",
+      "format_id": "FMT-004",
+      "target_status": "signature-only"
+    },
+    {
+      "current_status": "signature-only",
+      "fixture_id": "lis-signature",
+      "format_id": "FMT-005",
+      "target_status": "signature-only"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "csv-minimal",
+      "format_id": "FMT-006",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "p190-minimal",
+      "format_id": "FMT-007",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "sgp-minimal",
+      "format_id": "FMT-008",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "dat-fault-minimal",
+      "format_id": "FMT-009",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "text-minimal",
+      "format_id": "FMT-010",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "pdf-minimal",
+      "format_id": "FMT-011",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "manifest-minimal",
+      "format_id": "FMT-012",
+      "target_status": "supported"
+    },
+    {
+      "current_status": "supported",
+      "fixture_id": "schema-minimal",
+      "format_id": "FMT-013",
+      "target_status": "supported"
+    }
+  ],
+  "report_version": "1.0.0",
+  "summary": {
+    "blocking": 0,
+    "equal": 85,
+    "intentional_approved": 3,
+    "total": 88
+  }
+}

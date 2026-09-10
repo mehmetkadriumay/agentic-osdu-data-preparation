@@ -1,0 +1,122 @@
+{
+  "catalog_version": "1.0.0",
+  "fixtures": [
+    {
+      "fixture_id": "segy-minimal",
+      "format_id": "FMT-001",
+      "relative_path": "fmt-001.segy",
+      "source_kind": "synthetic",
+      "recipe": "segy_minimal",
+      "size_bytes": 3848,
+      "sha256": "0ce26a257599c77701c2b36a66dd3f669a74da48a6b0eabecf6456468a00ea2f"
+    },
+    {
+      "fixture_id": "las-minimal",
+      "format_id": "FMT-002",
+      "relative_path": "fmt-002.las",
+      "source_kind": "synthetic",
+      "recipe": "las_minimal",
+      "size_bytes": 141,
+      "sha256": "388f35fbf82ba8e9823cdf79122c90d1860eace696fcc767ed31771e66a38557"
+    },
+    {
+      "fixture_id": "json-well-log-minimal",
+      "format_id": "FMT-003",
+      "relative_path": "fmt-003.json",
+      "source_kind": "synthetic",
+      "recipe": "json_well_log_minimal",
+      "size_bytes": 123,
+      "sha256": "6ac1b055f3c874a7d69d93a7f31b0b3be04ac566300fa44066326058a48cf6a7"
+    },
+    {
+      "fixture_id": "dlis-signature",
+      "format_id": "FMT-004",
+      "relative_path": "fmt-004.dlis",
+      "source_kind": "synthetic",
+      "recipe": "dlis_signature",
+      "size_bytes": 36,
+      "sha256": "736bb490710317993c775405f6eada57ed991d52ec7e11f73f7af2820c82d447"
+    },
+    {
+      "fixture_id": "lis-signature",
+      "format_id": "FMT-005",
+      "relative_path": "fmt-005.lis",
+      "source_kind": "synthetic",
+      "recipe": "lis_signature",
+      "size_bytes": 38,
+      "sha256": "6fc2f8697121bfafdcea95d0fbac1ed93274a846d1350169fc1a6d3e141c374c"
+    },
+    {
+      "fixture_id": "csv-minimal",
+      "format_id": "FMT-006",
+      "relative_path": "fmt-006.csv",
+      "source_kind": "synthetic",
+      "recipe": "csv_minimal",
+      "size_bytes": 22,
+      "sha256": "54723ffcf2479a196245bdf146119bd1981c60513805cf11aadc53cc82ff7942"
+    },
+    {
+      "fixture_id": "p190-minimal",
+      "format_id": "FMT-007",
+      "relative_path": "fmt-007.p190",
+      "source_kind": "synthetic",
+      "recipe": "p190_minimal",
+      "size_bytes": 188,
+      "sha256": "2d2337b367ba4d76445c4fd0a10f1133eaca8670cf827f5e073eec2de6098cc2"
+    },
+    {
+      "fixture_id": "sgp-minimal",
+      "format_id": "FMT-008",
+      "relative_path": "fmt-008.sgp",
+      "source_kind": "synthetic",
+      "recipe": "sgp_minimal",
+      "size_bytes": 44,
+      "sha256": "620ec617945f9cee7fff5fba29fe59a09ebda661e2c335143d7e29e073640690"
+    },
+    {
+      "fixture_id": "dat-fault-minimal",
+      "format_id": "FMT-009",
+      "relative_path": "fmt-009-fault.dat",
+      "source_kind": "synthetic",
+      "recipe": "dat_fault_minimal",
+      "size_bytes": 74,
+      "sha256": "d005a3c5da4ee331265b6c579f280c334f0f0df7fe717d930ef5aefd8f436369"
+    },
+    {
+      "fixture_id": "text-minimal",
+      "format_id": "FMT-010",
+      "relative_path": "fmt-010.txt",
+      "source_kind": "synthetic",
+      "recipe": "text_minimal",
+      "size_bytes": 46,
+      "sha256": "8e328c6d573e974b0c696c08cc4e42b7d23d7036a3f8d18d7702da3cdf41a2eb"
+    },
+    {
+      "fixture_id": "pdf-minimal",
+      "format_id": "FMT-011",
+      "relative_path": "fmt-011.pdf",
+      "source_kind": "synthetic",
+      "recipe": "pdf_minimal",
+      "size_bytes": 29,
+      "sha256": "78032c27d2aed2e4323964527d44192de81dc183fc53bbf4161926499ee76e7d"
+    },
+    {
+      "fixture_id": "manifest-minimal",
+      "format_id": "FMT-012",
+      "relative_path": "fmt-012-manifest.json",
+      "source_kind": "synthetic",
+      "recipe": "manifest_minimal",
+      "size_bytes": 201,
+      "sha256": "6208bf877373b255e17b61332c9f66bc96cae55ae1b77ce2cd5b816e812f9e36"
+    },
+    {
+      "fixture_id": "schema-minimal",
+      "format_id": "FMT-013",
+      "relative_path": "fmt-013-schema.json",
+      "source_kind": "synthetic",
+      "recipe": "schema_minimal",
+      "size_bytes": 165,
+      "sha256": "b1e05b10693fc954d86e347468e6b2be7357d1169460702898cf3634f8c8e1cc"
+    }
+  ]
+}

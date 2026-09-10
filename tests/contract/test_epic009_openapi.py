@@ -22,7 +22,7 @@ class RejectingInvoker:
         raise OrchestrationError("TEST_REJECTION", "Safe test rejection.")
 
 
-def test_openapi_exposes_complete_epic009_surface_without_migration_or_ingestion() -> None:
+def test_openapi_exposes_complete_epic009_surface_without_ingestion() -> None:
     schema = create_app(RejectingInvoker()).openapi()
     paths = set(schema["paths"])
     assert {
@@ -47,7 +47,7 @@ def test_openapi_exposes_complete_epic009_surface_without_migration_or_ingestion
         "/api/v1/review/decisions",
         "/api/v1/exports",
     } <= paths
-    assert not any("migrat" in path or "ingest" in path for path in paths)
+    assert not any("ingest" in path for path in paths)
 
 
 def test_every_operation_has_stable_id_and_tool_error_response() -> None:

@@ -7,6 +7,7 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Never
 from urllib.parse import urlsplit
 
@@ -44,6 +45,11 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", default=8000, type=int)
     serve.add_argument("--allow-non-loopback", action="store_true")
+    migration = commands.add_parser("migration")
+    migration.add_argument("--inventory", required=True)
+    migration.add_argument("--learning", required=True)
+    migration.add_argument("--database", required=True)
+    migration.add_argument("--legacy-root", required=True)
     return parser
 
 
@@ -96,6 +102,22 @@ def main(argv: Sequence[str] | None = None, *, transport: Transport | None = Non
             host=settings.host,
             port=settings.port,
         )
+        return 0
+    if args.command == "migration":
+        from agentic_osdu.migration import LegacyMigrationError, migrate_to_sqlite
+
+        database_path = Path(args.database).resolve()
+        try:
+            report = migrate_to_sqlite(
+                Path(args.inventory),
+                Path(args.learning),
+                database_path,
+                legacy_root=Path(args.legacy_root),
+            )
+        except LegacyMigrationError as error:
+            print(json.dumps({"errors": [{"code": error.code, "message": str(error)}]}))
+            return 3
+        print(json.dumps(report.model_dump(mode="json"), sort_keys=True))
         return 0
     try:
         payload = json.loads(args.json_payload)

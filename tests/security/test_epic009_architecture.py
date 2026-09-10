@@ -33,7 +33,7 @@ def test_api_cli_and_ui_server_do_not_embed_domain_or_persistence_implementation
         }, path
 
 
-def test_no_migration_or_osdu_ingestion_surface_is_added() -> None:
+def test_no_osdu_ingestion_surface_is_added() -> None:
     root = Path(__file__).parents[2]
     paths = [
         *sorted((root / "src" / "agentic_osdu" / "api").rglob("*.py")),
@@ -45,5 +45,4 @@ def test_no_migration_or_osdu_ingestion_surface_is_added() -> None:
         for path in paths
         if path.is_file() and path.suffix in {".py", ".ts", ".tsx"}
     ).casefold()
-    assert "migration" not in source
     assert "osdu ingestion" not in source

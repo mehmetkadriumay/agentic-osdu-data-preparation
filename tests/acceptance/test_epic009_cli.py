@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from agentic_osdu.cli import main
 
@@ -58,8 +59,41 @@ def test_cli_returns_nonzero_for_failed_tool_result(capsys: object) -> None:
     assert json.loads(capsys.readouterr().out)["status"] == "failed"  # type: ignore[attr-defined]
 
 
-def test_cli_has_no_migration_command() -> None:
-    assert main(["migration", "--json", "{}"], transport=_unused_transport) == 2
+def test_cli_migration_command_runs_locally_without_api_transport(
+    tmp_path: Path,
+    capsys: object,
+) -> None:
+    legacy_root = tmp_path / "legacy-copy"
+    legacy_root.mkdir()
+    inventory = legacy_root / "inventory.json"
+    learning = legacy_root / "learning.json"
+    database = tmp_path / "state.db"
+    inventory.write_text(
+        json.dumps({"schemaVersion": 1, "files": [], "count": 0, "totalBytes": 0}),
+        encoding="utf-8",
+    )
+    learning.write_text(json.dumps({"categories": {}}), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "migration",
+                "--inventory",
+                str(inventory),
+                "--learning",
+                str(learning),
+                "--database",
+                str(database),
+                "--legacy-root",
+                str(legacy_root),
+            ],
+            transport=_unused_transport,
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert result["counts"]["failed"] == 0
+    assert database.is_file()
 
 
 def test_cli_rejects_unsafe_api_url_with_json_exit_code(capsys: object) -> None:
