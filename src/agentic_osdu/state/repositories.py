@@ -17,10 +17,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from agentic_osdu.domain.models import (
     ActorRef,
+    ApprovedAbsolutePath,
+    ClassificationRecord,
+    FileAssetRef,
+    FormatDetectionResult,
     GeneratedManifestCandidate,
+    LearningExampleRef,
     LearningModelStatus,
     ManifestDocumentRef,
     ManifestJsonDocument,
+    OSDUKind,
     ProvenanceRecord,
     ReviewDecision,
     ReviewDecisionReceipt,
@@ -28,6 +34,7 @@ from agentic_osdu.domain.models import (
     ReviewStatus,
     ReviewTargetType,
     TrustLevel,
+    WorkspaceRelativePath,
 )
 from agentic_osdu.state.models import (
     AuditEventEntity,
@@ -44,17 +51,23 @@ from agentic_osdu.state.models import (
     MetadataExtractionEntity,
     ReviewDecisionEntity,
     StateCounterEntity,
+    WorkspaceEntity,
 )
 from agentic_osdu.tools.contracts import (
     AssociationMutation,
     AssociationSnapshotRef,
+    ExtractedMetadataContract,
+    FileRecordContract,
+    InventoryMutation,
     InventorySnapshotRef,
+    LearningModelContract,
     LearningModelVersionOutput,
     LearningMutationAction,
     PersistAssociationsInput,
     PersistInventoryInput,
     PersistLearningModelInput,
     ValidationReport,
+    WorkspaceDescriptor,
 )
 
 T = TypeVar("T", bound=BaseModel)
@@ -173,6 +186,28 @@ class StateRepository:
                         retryable=True,
                     )
                 now = _now()
+                archived_file_count: int | None = None
+                archive_payload: dict[str, Any] | None = None
+                if request.archive_before_reset:
+                    if inventory is None:
+                        raise StateConflictError(
+                            "INVENTORY_NOT_FOUND", "The inventory was not found."
+                        )
+                    if any(
+                        (
+                            request.mutation.files,
+                            request.mutation.detections,
+                            request.mutation.extractions,
+                            request.mutation.classifications,
+                            request.mutation.remove_file_ids,
+                        )
+                    ):
+                        raise StateConflictError(
+                            "STATE_VERSION_CONFLICT",
+                            "An archive/reset request cannot contain other inventory mutations.",
+                        )
+                    archive_payload = self._inventory_archive_snapshot(session, inventory_id)
+                    archived_file_count = len(archive_payload["files"])
                 if inventory is None:
                     inventory = InventoryEntity(
                         id=inventory_id,
@@ -197,7 +232,24 @@ class StateRepository:
                             "The inventory state version is stale.",
                             retryable=True,
                         )
-                for file_id in request.mutation.remove_file_ids:
+                remove_file_ids = request.mutation.remove_file_ids
+                if request.archive_before_reset:
+                    remove_file_ids = tuple(
+                        UUID(value)
+                        for value in session.scalars(
+                            select(FileAssetEntity.id).where(
+                                FileAssetEntity.inventory_id == inventory_id
+                            )
+                        ).all()
+                    )
+                    session.execute(
+                        delete(ManifestAssociationEntity).where(
+                            ManifestAssociationEntity.file_id.in_(
+                                tuple(str(value) for value in remove_file_ids)
+                            )
+                        )
+                    )
+                for file_id in remove_file_ids:
                     row = session.get(FileAssetEntity, str(file_id))
                     if row is not None and row.inventory_id != inventory_id:
                         raise StateConflictError(
@@ -248,13 +300,24 @@ class StateRepository:
                     state_version=current + 1,
                     file_count=int(file_count or 0),
                     created_at=now,
+                    archive_id=request_id if request.archive_before_reset else None,
+                    prior_state_version=current if request.archive_before_reset else None,
+                    archived_file_count=archived_file_count,
                 )
                 _audit(
                     session,
                     request_id=request_id,
                     actor=actor,
                     tool_id="TOOL-022",
-                    payload={"inventory_id": inventory_id, "state_version": result.state_version},
+                    payload={
+                        "inventory_id": inventory_id,
+                        "state_version": result.state_version,
+                        **(
+                            {"archive_id": str(request_id), "snapshot": archive_payload}
+                            if archive_payload is not None
+                            else {}
+                        ),
+                    },
                 )
                 self._remember(session, request_id, "TOOL-022", request, result)
                 self._checkpoint(cancellation)
@@ -266,8 +329,62 @@ class StateRepository:
                 "DB_WRITE_FAILED", "The inventory transaction failed."
             ) from error
 
+    def archive_and_reset_inventory(
+        self,
+        *,
+        request_id: UUID,
+        actor: ActorRef,
+        inventory_id: UUID,
+        expected_state_version: int | None,
+    ) -> InventorySnapshotRef:
+        if expected_state_version is None:
+            raise StateConflictError("INVENTORY_NOT_FOUND", "The inventory was not found.")
+        return self.persist_inventory(
+            request_id=request_id,
+            actor=actor,
+            request=PersistInventoryInput(
+                mutation=InventoryMutation(inventory_id=inventory_id),
+                expected_state_version=expected_state_version,
+                archive_before_reset=True,
+            ),
+        )
+
+    @staticmethod
+    def _inventory_archive_snapshot(session: Session, inventory_id: str) -> dict[str, Any]:
+        files = session.scalars(
+            select(FileAssetEntity)
+            .where(FileAssetEntity.inventory_id == inventory_id)
+            .order_by(FileAssetEntity.relative_path)
+        ).all()
+        file_ids = [row.id for row in files]
+
+        def payloads(entity: Any, order_column: Any) -> list[dict[str, Any]]:
+            if not file_ids:
+                return []
+            return [
+                dict(row.payload)
+                for row in session.scalars(
+                    select(entity).where(entity.file_id.in_(file_ids)).order_by(order_column)
+                ).all()
+            ]
+
+        return {
+            "inventory_id": inventory_id,
+            "state_version": session.scalar(
+                select(InventoryEntity.state_version).where(InventoryEntity.id == inventory_id)
+            ),
+            "files": [dict(row.payload) for row in files],
+            "detections": payloads(FormatDetectionEntity, FormatDetectionEntity.id),
+            "extractions": payloads(MetadataExtractionEntity, MetadataExtractionEntity.id),
+            "classifications": payloads(ClassificationEntity, ClassificationEntity.id),
+            "associations": payloads(ManifestAssociationEntity, ManifestAssociationEntity.id),
+        }
+
     @staticmethod
     def _persist_inventory_children(session: Session, request: PersistInventoryInput) -> None:
+        complete_extractions = {
+            item.reference.extraction_id: item for item in request.mutation.extracted_metadata
+        }
         for detection in request.mutation.detections:
             detection_row = session.get(FormatDetectionEntity, str(detection.detection_id))
             values = {
@@ -289,13 +406,14 @@ class StateRepository:
                     setattr(detection_row, name, value)
         session.flush()
         for extraction in request.mutation.extractions:
+            complete = complete_extractions.get(extraction.extraction_id)
             extraction_row = session.get(MetadataExtractionEntity, str(extraction.extraction_id))
             values = {
                 "file_id": str(extraction.file_id),
                 "file_sha256": extraction.file_sha256,
                 "format_id": extraction.format_id.value,
                 "parser_version": extraction.parser_version,
-                "payload": _json(extraction),
+                "payload": _json(complete or extraction),
                 "errors": [],
                 "provenance": [str(item) for item in extraction.provenance_ids],
                 "created_at": extraction.extracted_at,
@@ -315,11 +433,37 @@ class StateRepository:
             classification_row = session.get(
                 ClassificationEntity, str(classification.classification_id)
             )
+            evidence_ids = set(classification.evidence_ids)
+            matched_detection = next(
+                (
+                    item
+                    for item in request.mutation.detections
+                    if item.detection_id == classification.detection_id
+                ),
+                None,
+            )
+            if matched_detection is not None:
+                evidence_ids.update(
+                    evidence_id
+                    for candidate in matched_detection.candidates
+                    for evidence_id in candidate.evidence_ids
+                )
+            payload = _json(classification)
+            payload["_evidence"] = [
+                _json(item)
+                for item in request.mutation.evidence
+                if item.evidence_id in evidence_ids
+            ]
+            payload["_provenance"] = [
+                _json(item)
+                for item in request.mutation.provenance
+                if item.source_ref == str(classification.file_id)
+            ]
             values = {
                 "file_id": str(classification.file_id),
                 "detection_id": str(classification.detection_id),
                 "active": True,
-                "payload": _json(classification),
+                "payload": payload,
                 "created_at": _now(),
             }
             if classification_row is None:
@@ -502,6 +646,7 @@ class StateRepository:
                         raise StateConflictError(
                             "MODEL_VERSION_CONFLICT", "A create mutation requires a model."
                         )
+                    self._resolve_learning_examples(session, mutation.model.example_identities)
                     model_id = mutation.model.learning_model_id
                     latest = self._latest_model(session, model_id)
                     current = 0 if latest is None else latest.version
@@ -715,7 +860,9 @@ class StateRepository:
             values = {
                 "path": manifest.path.root,
                 "sha256": manifest.sha256,
-                "document_kind": str(manifest.document_kind) if manifest.document_kind else None,
+                "document_kind": (
+                    manifest.document_kind.root if manifest.document_kind is not None else None
+                ),
                 "normalized_content_ref": manifest.normalized_content_ref,
                 "normalized_content": content.model_dump(mode="json")["content"],
                 "validation": None if validation is None else _json(validation),
@@ -737,6 +884,49 @@ class StateRepository:
                 tool_id="TOOL-022",
                 payload={"manifest_id": str(manifest.manifest_id)},
             )
+
+    def persist_manifest_validation(
+        self,
+        manifest: ManifestDocumentRef,
+        content: ManifestJsonDocument,
+        validation: ValidationReport,
+        provenance: tuple[ProvenanceRecord, ...],
+        *,
+        request_id: UUID,
+        actor: ActorRef,
+    ) -> None:
+        try:
+            with self.session_factory.begin() as session:
+                row = session.get(ManifestDocumentEntity, str(manifest.manifest_id))
+                normalized_content = content.model_dump(mode="json")["content"]
+                if (
+                    row is None
+                    or row.path != manifest.path.root
+                    or row.sha256 != manifest.sha256
+                    or row.normalized_content != normalized_content
+                ):
+                    raise StateConflictError(
+                        "STATE_VERSION_CONFLICT",
+                        "Manifest validation requires the immutable persisted document.",
+                    )
+                row.validation = _json(validation)
+                row.provenance = [_json(item) for item in provenance]
+                _audit(
+                    session,
+                    request_id=request_id,
+                    actor=actor,
+                    tool_id="TOOL-020",
+                    payload={
+                        "manifest_id": str(manifest.manifest_id),
+                        "validation_status": validation.status.value,
+                    },
+                )
+        except StateConflictError:
+            raise
+        except (IntegrityError, SQLAlchemyError) as error:
+            raise StateConflictError(
+                "DB_WRITE_FAILED", "The manifest validation transaction failed."
+            ) from error
 
     def persist_generated_candidate(
         self,
@@ -780,6 +970,14 @@ class StateRepository:
                     "STATE_VERSION_CONFLICT", "Candidate identity cannot be reassigned."
                 )
             else:
+                if validation is not None:
+                    row.validation = _json(validation)
+                    row.validation_status = candidate.reference.validation_status.value
+                    row.payload = payload
+                if provenance:
+                    row.provenance = [_json(item) for item in provenance]
+                if source_content is not None:
+                    row.source_content = source_content.model_dump(mode="json")["content"]
                 return
             _audit(
                 session,
@@ -788,6 +986,115 @@ class StateRepository:
                 tool_id="TOOL-022",
                 payload={"candidate_id": identifier},
             )
+
+    def persist_workspace(self, descriptor: WorkspaceDescriptor, actor: ActorRef) -> None:
+        with self.session_factory.begin() as session:
+            row = session.get(WorkspaceEntity, str(descriptor.workspace_id))
+            values = {
+                "canonical_root": descriptor.canonical_root.root,
+                "read_only": descriptor.read_only,
+                "allowed_output_subpaths": [
+                    item.root for item in descriptor.allowed_output_subpaths
+                ],
+                "policy_fingerprint": descriptor.policy_fingerprint,
+                "version": 1,
+                "created_actor": actor.model_dump(mode="json"),
+                "created_at": _now(),
+            }
+            if row is None:
+                session.add(WorkspaceEntity(id=str(descriptor.workspace_id), **values))
+            elif row.policy_fingerprint != descriptor.policy_fingerprint:
+                raise StateConflictError(
+                    "STATE_VERSION_CONFLICT", "Workspace policy identity cannot be reassigned."
+                )
+
+    def list_workspaces(self) -> tuple[WorkspaceDescriptor, ...]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(WorkspaceEntity).order_by(WorkspaceEntity.created_at)
+            ).all()
+            return tuple(
+                WorkspaceDescriptor(
+                    workspace_id=UUID(row.id),
+                    canonical_root=ApprovedAbsolutePath(row.canonical_root),
+                    read_only=row.read_only,
+                    allowed_output_subpaths=tuple(
+                        WorkspaceRelativePath(value) for value in row.allowed_output_subpaths
+                    ),
+                    policy_fingerprint=row.policy_fingerprint,
+                )
+                for row in rows
+            )
+
+    def load_runtime_file_records(self) -> tuple[tuple[UUID, FileRecordContract], ...]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(FileAssetEntity).order_by(FileAssetEntity.inventory_id, FileAssetEntity.id)
+            ).all()
+            loaded: list[tuple[UUID, FileRecordContract]] = []
+            for row in rows:
+                file = FileAssetRef.model_validate_json(json.dumps(row.payload))
+                detection_row = session.scalar(
+                    select(FormatDetectionEntity)
+                    .where(
+                        FormatDetectionEntity.file_id == row.id,
+                        FormatDetectionEntity.active.is_(True),
+                    )
+                    .order_by(FormatDetectionEntity.created_at.desc())
+                    .limit(1)
+                )
+                classification_row = session.scalar(
+                    select(ClassificationEntity)
+                    .where(
+                        ClassificationEntity.file_id == row.id,
+                        ClassificationEntity.active.is_(True),
+                    )
+                    .order_by(ClassificationEntity.created_at.desc())
+                    .limit(1)
+                )
+                extraction_rows = session.scalars(
+                    select(MetadataExtractionEntity)
+                    .where(MetadataExtractionEntity.file_id == row.id)
+                    .order_by(MetadataExtractionEntity.created_at)
+                ).all()
+                extracted = tuple(
+                    ExtractedMetadataContract.model_validate_json(json.dumps(item.payload))
+                    for item in extraction_rows
+                    if "reference" in item.payload and "payload" in item.payload
+                )
+                classification_payload = (
+                    {}
+                    if classification_row is None
+                    else {
+                        key: value
+                        for key, value in classification_row.payload.items()
+                        if not key.startswith("_")
+                    }
+                )
+                loaded.append(
+                    (
+                        UUID(row.inventory_id),
+                        FileRecordContract(
+                            file=file,
+                            detection=(
+                                None
+                                if detection_row is None
+                                else FormatDetectionResult.model_validate_json(
+                                    json.dumps(detection_row.payload)
+                                )
+                            ),
+                            classification=(
+                                None
+                                if classification_row is None
+                                else ClassificationRecord.model_validate_json(
+                                    json.dumps(classification_payload)
+                                )
+                            ),
+                            metadata_extractions=extracted,
+                        ),
+                    )
+                )
+            return tuple(loaded)
 
     def get_generated_candidate(self, candidate_id: UUID) -> GeneratedManifestCandidate | None:
         with self.session_factory() as session:
@@ -814,6 +1121,159 @@ class StateRepository:
         with self.session_factory() as session:
             return session.scalar(
                 select(InventoryEntity.state_version).where(InventoryEntity.id == str(inventory_id))
+            )
+
+    def get_association_version(self) -> int:
+        with self.session_factory() as session:
+            return (
+                session.scalar(
+                    select(StateCounterEntity.version).where(
+                        StateCounterEntity.namespace == "associations"
+                    )
+                )
+                or 0
+            )
+
+    def resolve_learning_examples(
+        self, requested: tuple[LearningExampleRef, ...]
+    ) -> tuple[LearningExampleRef, ...]:
+        """Resolve exact approved, human-reviewed examples from persisted state."""
+        with self.session_factory() as session:
+            return self._resolve_learning_examples(session, requested)
+
+    @staticmethod
+    def _resolve_learning_examples(
+        session: Session, requested: tuple[LearningExampleRef, ...]
+    ) -> tuple[LearningExampleRef, ...]:
+        resolved: list[LearningExampleRef] = []
+        for example in requested:
+            association = session.get(ManifestAssociationEntity, str(example.association_id))
+            file = session.get(FileAssetEntity, str(example.source_file_id))
+            manifest = session.get(ManifestDocumentEntity, str(example.manifest_id))
+            if association is None or file is None or manifest is None:
+                raise StateConflictError(
+                    "NO_ELIGIBLE_EXAMPLES",
+                    "Every learning example must match persisted state.",
+                )
+            if file.sha256 is None:
+                raise StateConflictError(
+                    "NO_ELIGIBLE_EXAMPLES",
+                    "Every learning example requires a persisted complete file hash.",
+                )
+            decision = session.scalar(
+                select(ReviewDecisionEntity)
+                .where(
+                    ReviewDecisionEntity.target_type == ReviewTargetType.MANIFEST_ASSOCIATION.value,
+                    ReviewDecisionEntity.target_id == str(example.association_id),
+                    ReviewDecisionEntity.target_version == manifest.sha256,
+                    ReviewDecisionEntity.decision == ReviewDecisionValue.APPROVE.value,
+                )
+                .order_by(ReviewDecisionEntity.decided_at.desc())
+                .limit(1)
+            )
+            exact = (
+                decision is not None
+                and association.file_id == str(example.source_file_id)
+                and association.manifest_id == str(example.manifest_id)
+                and association.review_status == ReviewStatus.APPROVED.value
+                and association.target_version == manifest.sha256
+                and file.sha256 == example.source_sha256
+                and manifest.sha256 == example.manifest_sha256
+                and not manifest.generated
+            )
+            if not exact:
+                raise StateConflictError(
+                    "NO_ELIGIBLE_EXAMPLES",
+                    ("Every learning example must exactly match a persisted approved association."),
+                )
+            resolved.append(
+                LearningExampleRef(
+                    example_id=example.example_id,
+                    source_file_id=UUID(association.file_id),
+                    manifest_id=UUID(association.manifest_id),
+                    association_id=UUID(association.id),
+                    source_sha256=file.sha256,
+                    manifest_sha256=manifest.sha256,
+                    review_status=ReviewStatus.APPROVED,
+                    generated_manifest=False,
+                )
+            )
+        return tuple(resolved)
+
+    def get_active_learning_model(self) -> LearningModelVersionOutput | None:
+        with self.session_factory() as session:
+            active = self._current_active_models(session)
+            if not active:
+                return None
+            latest = max(active, key=lambda row: row.recorded_at)
+            return self._model_output(latest)
+
+    def get_active_learning_models(self) -> tuple[LearningModelContract, ...]:
+        """Return the persisted payload for every currently active model version."""
+        with self.session_factory() as session:
+            return tuple(
+                LearningModelContract.model_validate_json(json.dumps(row.payload))
+                for row in self._current_active_models(session)
+            )
+
+    def get_manifest_document(self, manifest_id: UUID) -> ManifestDocumentRef | None:
+        with self.session_factory() as session:
+            row = session.get(ManifestDocumentEntity, str(manifest_id))
+            if row is None:
+                return None
+            document_kind = row.document_kind
+            if (
+                document_kind is not None
+                and document_kind.startswith("root='")
+                and document_kind.endswith("'")
+            ):
+                document_kind = document_kind[6:-1]
+            return ManifestDocumentRef(
+                manifest_id=UUID(row.id),
+                path=WorkspaceRelativePath(row.path),
+                sha256=row.sha256,
+                document_kind=OSDUKind(document_kind) if document_kind else None,
+                normalized_content_ref=row.normalized_content_ref,
+                generated=row.generated,
+            )
+
+    def list_manifest_documents(
+        self,
+    ) -> tuple[tuple[ManifestDocumentRef, ManifestJsonDocument], ...]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(ManifestDocumentEntity).order_by(ManifestDocumentEntity.path)
+            ).all()
+            documents: list[tuple[ManifestDocumentRef, ManifestJsonDocument]] = []
+            for row in rows:
+                if row.normalized_content is None:
+                    continue
+                document_kind = row.document_kind
+                documents.append(
+                    (
+                        ManifestDocumentRef(
+                            manifest_id=UUID(row.id),
+                            path=WorkspaceRelativePath(row.path),
+                            sha256=row.sha256,
+                            document_kind=OSDUKind(document_kind) if document_kind else None,
+                            normalized_content_ref=row.normalized_content_ref,
+                            generated=row.generated,
+                        ),
+                        ManifestJsonDocument(
+                            sha256=row.sha256,
+                            content=row.normalized_content,
+                        ),
+                    )
+                )
+            return tuple(documents)
+
+    def list_associated_file_ids(self) -> frozenset[UUID]:
+        with self.session_factory() as session:
+            return frozenset(
+                UUID(value)
+                for value in session.scalars(
+                    select(ManifestAssociationEntity.file_id).distinct()
+                ).all()
             )
 
     def get_candidate_review_context(

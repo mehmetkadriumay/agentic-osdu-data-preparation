@@ -233,6 +233,11 @@ class ToolRegistryAdapter:
             raise OrchestrationError("UNREGISTERED_TOOL", "The requested tool is not registered.")
         return definition
 
+    @property
+    def executable_tool_ids(self) -> frozenset[str]:
+        """Expose the immutable set of concretely configured tool handlers."""
+        return frozenset(self._handlers)
+
     def invoke(
         self,
         tool_id: str,

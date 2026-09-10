@@ -16,9 +16,12 @@ from sqlalchemy import select
 from agentic_osdu.domain.models import (
     ActorRef,
     ClassificationRecord,
+    EvidenceRecord,
     FileAssetRef,
+    GeneratedCandidateRef,
     GeneratedManifestCandidate,
     ManifestAssociation,
+    ProvenanceRecord,
     ReviewStatus,
     WorkspaceRelativePath,
 )
@@ -26,7 +29,9 @@ from agentic_osdu.policy import OutputPolicy, PolicyViolation
 from agentic_osdu.state.models import (
     ClassificationEntity,
     FileAssetEntity,
+    GeneratedCandidateEntity,
     ManifestAssociationEntity,
+    ManifestDocumentEntity,
 )
 from agentic_osdu.state.repositories import StateConflictError, StateRepository
 from agentic_osdu.tools.contracts import (
@@ -96,11 +101,31 @@ class ReviewService:
                     )
                     .limit(1)
                 )
+                candidate_row = session.scalar(
+                    select(GeneratedCandidateEntity)
+                    .where(GeneratedCandidateEntity.source_file_id == row.id)
+                    .order_by(
+                        GeneratedCandidateEntity.state_version.desc(),
+                        GeneratedCandidateEntity.id.desc(),
+                    )
+                    .limit(1)
+                )
+                classification_payload = (
+                    {} if classification_row is None else dict(classification_row.payload)
+                )
+                evidence = tuple(
+                    EvidenceRecord.model_validate_json(json.dumps(value))
+                    for value in classification_payload.pop("_evidence", ())
+                )
+                provenance = tuple(
+                    ProvenanceRecord.model_validate_json(json.dumps(value))
+                    for value in classification_payload.pop("_provenance", ())
+                )
                 classification = (
                     None
                     if classification_row is None
                     else ClassificationRecord.model_validate_json(
-                        json.dumps(classification_row.payload)
+                        json.dumps(classification_payload)
                     )
                 )
 
@@ -113,10 +138,31 @@ class ReviewService:
                         update={"review_status": ReviewStatus(association_row.review_status)}
                     )
                 )
+                manifest_sha256 = (
+                    None
+                    if association_row is None
+                    else session.scalar(
+                        select(ManifestDocumentEntity.sha256).where(
+                            ManifestDocumentEntity.id == association_row.manifest_id
+                        )
+                    )
+                )
                 item = InventoryReviewItem(
                     file=file,
                     classification=classification,
                     association=association,
+                    candidate=(
+                        None
+                        if candidate_row is None
+                        else GeneratedCandidateRef.model_validate_json(
+                            json.dumps(candidate_row.payload["reference"])
+                        ).model_copy(
+                            update={"review_status": ReviewStatus(candidate_row.review_status)}
+                        )
+                    ),
+                    manifest_sha256=manifest_sha256,
+                    evidence=evidence,
+                    provenance=provenance,
                 )
                 if self._matches(item, request):
                     items.append(item)
@@ -125,6 +171,8 @@ class ReviewService:
             page = items[request.query.offset : request.query.offset + request.query.limit]
             return InventoryReviewView(
                 inventory_id=request.inventory_id,
+                state_version=self._repository.get_inventory_version(request.inventory_id) or 1,
+                active_learning_model=self._repository.get_active_learning_model(),
                 total_count=total,
                 category_summaries=self._summaries(
                     item.classification.category.value
@@ -154,20 +202,26 @@ class ReviewService:
         cancellation: CancellationCheck | None = None,
     ) -> ManifestReviewView:
         self._checkpoint(cancellation)
-        if isinstance(request.manifest, GeneratedManifestCandidate):
-            persisted = self._repository.get_generated_candidate(
-                request.manifest.reference.candidate_id
-            )
+        manifest = request.manifest
+        if request.manifest_id is not None:
+            manifest = self._repository.get_generated_candidate(request.manifest_id)
+            if manifest is None:
+                manifest = self._repository.get_manifest_document(request.manifest_id)
+            if manifest is None:
+                raise ReviewError("MANIFEST_NOT_FOUND", "The manifest content was not found.")
+        if manifest is None:
+            raise ReviewError("MANIFEST_NOT_FOUND", "The manifest content was not found.")
+        if isinstance(manifest, GeneratedManifestCandidate):
+            persisted = self._repository.get_generated_candidate(manifest.reference.candidate_id)
             if (
                 persisted is None
-                or persisted.reference.candidate_sha256
-                != request.manifest.reference.candidate_sha256
-                or persisted.document.sha256 != request.manifest.document.sha256
-                or persisted.document.content != request.manifest.document.content
+                or persisted.reference.candidate_sha256 != manifest.reference.candidate_sha256
+                or persisted.document.sha256 != manifest.document.sha256
+                or persisted.document.content != manifest.document.content
                 or self._document_sha256(persisted.document.content)
                 != persisted.reference.candidate_sha256
-                or self._document_sha256(request.manifest.document.content)
-                != request.manifest.reference.candidate_sha256
+                or self._document_sha256(manifest.document.content)
+                != manifest.reference.candidate_sha256
             ):
                 raise ReviewError(
                     "STALE_REVIEW_TARGET",
@@ -175,7 +229,7 @@ class ReviewService:
                 )
             try:
                 validation, provenance, source = self._repository.get_candidate_review_context(
-                    request.manifest.reference.candidate_id
+                    manifest.reference.candidate_id
                 )
             except StateConflictError:
                 validation, provenance, source = None, (), None
@@ -194,18 +248,18 @@ class ReviewService:
                     )
                 ),
             )
-        content = self._repository.get_manifest_content(request.manifest.manifest_id)
+        content = self._repository.get_manifest_content(manifest.manifest_id)
         if content is None:
             raise ReviewError("MANIFEST_NOT_FOUND", "The manifest content was not found.")
         try:
             validation, provenance = self._repository.get_manifest_review_context(
-                request.manifest.manifest_id
+                manifest.manifest_id
             )
         except StateConflictError:
             validation, provenance = None, ()
         self._checkpoint(cancellation)
         return ManifestReviewView(
-            manifest=request.manifest,
+            manifest=manifest,
             content=content,
             validation=validation,
             provenance=provenance,

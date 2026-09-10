@@ -367,6 +367,39 @@ class DiscoveryService:
         self._validated_file_state(file_id)
         return DiscoveredFormatSource(file_id=file_id, _service=self)
 
+    def complete_sha256(self, file_id: UUID) -> str:
+        """Hash the validated discovered file with bounded-memory reads."""
+
+        digest = sha256()
+        with self._open_discovered_binary(file_id, max_bytes=None) as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def restore_discovered_file(self, asset: FileAssetRef) -> None:
+        """Restore a persisted file capability after validating its current fingerprint."""
+
+        workspace = self._store.get(asset.workspace_id)
+        if workspace is None:
+            raise DiscoveryError("ROOT_POLICY_DENIED", "The persisted workspace is unavailable.")
+        try:
+            authorized = self._path_policy.authorize_child(
+                workspace.canonical_root.root,
+                asset.relative_path.root,
+                follow_links=False,
+            )
+            current = os.stat(authorized.canonical_path, follow_symlinks=False)
+        except (OSError, PolicyViolation) as error:
+            raise DiscoveryError(
+                "FILE_CHANGED", "The persisted file cannot be restored safely."
+            ) from error
+        with self._lock:
+            self._files[asset.file_id] = _FileState(
+                asset=asset,
+                canonical_path=authorized.canonical_path,
+                signature=self._signature(current),
+            )
+
     def _validated_file_state(self, file_id: UUID) -> _FileState:
         with self._lock:
             state = self._files.get(file_id)

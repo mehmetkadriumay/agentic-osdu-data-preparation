@@ -21,11 +21,16 @@ classifiers = [
 dependencies = [
     "alembic>=1.16,<2",
     "dlisio>=1,<2",
+    "fastapi>=0.116,<1",
     "ijson>=3.3,<4",
     "jsonschema[format]>=4.23,<5",
     "pydantic>=2.11,<3",
     "sqlalchemy>=2.0,<3",
+    "uvicorn>=0.35,<1",
 ]
+
+[project.scripts]
+agentic-osdu = "agentic_osdu.cli:entrypoint"
 
 [project.urls]
 Homepage = "https://github.com/mehmetkadriumay/agentic-osdu-data-preparation"
@@ -40,6 +45,7 @@ dev = [
     "bandit[toml]>=1.8,<2",
     "build>=1.2,<2",
     "hatchling==1.27.0",
+    "httpx>=0.28,<1",
     "mypy>=1.15,<2",
     "pip-audit>=2.9,<3",
     "pre-commit>=4,<5",

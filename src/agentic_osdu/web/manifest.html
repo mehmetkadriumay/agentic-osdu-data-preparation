@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manifest review</title>
+  <script type="module" crossorigin src="/assets/manifest-COvLs7mi.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/style-B3YooghB.js">
+  <link rel="stylesheet" crossorigin href="/assets/style-CzwIYrti.css">
+</head>
+<body>
+  <header><a href="/">Back to inventory</a><h1>Manifest review</h1></header>
+  <main>
+    <section aria-labelledby="validation-heading">
+      <h2 id="validation-heading">Validation</h2>
+      <strong id="validation" role="status">Loading</strong>
+      <ul id="validation-errors"></ul>
+    </section>
+    <section aria-labelledby="association-heading">
+      <h2 id="association-heading">Association evidence</h2><p id="association"></p>
+    </section>
+    <section aria-labelledby="provenance-heading">
+      <h2 id="provenance-heading">Provenance and trust</h2>
+      <p><strong id="candidate-trust">Trust level: loading</strong></p>
+      <p><strong id="candidate-review-required">Review requirement: loading</strong></p>
+      <p id="provenance"></p>
+    </section>
+    <section aria-labelledby="diff-heading"><h2 id="diff-heading">Generation diff</h2><p id="diff"></p></section>
+    <section aria-labelledby="json-heading">
+      <h2 id="json-heading">Formatted JSON</h2>
+      <button id="copy" type="button">Copy JSON</button>
+      <pre id="json"></pre>
+    </section>
+    <section aria-labelledby="decision-heading">
+      <h2 id="decision-heading">Review decision</h2>
+      <label>Reason <input id="reason"></label>
+      <div class="actions">
+        <button type="button" data-decision="approve">Approve</button>
+        <button type="button" data-decision="reject">Reject</button>
+        <button type="button" data-decision="needs_changes">Needs changes</button>
+      </div>
+      <label>Approved output root <select id="output-root"></select></label>
+      <label>Relative export path <input id="output-path" placeholder="review/candidate.json"></label>
+      <button id="export" type="button" disabled>Export candidate</button>
+      <p id="decision-status" role="status"></p>
+    </section>
+  </main>
+</body>
+</html>

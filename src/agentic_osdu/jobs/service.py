@@ -87,6 +87,10 @@ class JobExecutionContext:
         if self._cancelled():
             raise JobCancelled()
 
+    def cancelled(self) -> bool:
+        """Return the persisted cooperative-cancellation state for child tools."""
+        return self._cancelled()
+
     def progress(self, counts: dict[str, int], current_item: str | None = None) -> None:
         self.checkpoint()
         self._progress(counts, current_item)
@@ -259,6 +263,7 @@ class JobService:
         )
         lease_thread.start()
         failures = 0
+        all_items_failed = False
         cancelled = False
         stop_after_failure = threading.Event()
         max_workers = min(self._worker_limit, definition.max_concurrency)
@@ -300,6 +305,8 @@ class JobService:
                         cancelled = True
                     except Exception as error:
                         failures += 1
+                        if getattr(error, "code", None) == "JOB_ALL_ITEMS_FAILED":
+                            all_items_failed = True
                         self._increment_event(
                             job_id,
                             JobEventType.ITEM_FAILED,
@@ -331,6 +338,8 @@ class JobService:
                 lease_owner=lease_owner,
             )
         if failures:
+            if all_items_failed:
+                return self.transition(job_id, JobStatus.FAILED, lease_owner=lease_owner)
             terminal = (
                 JobStatus.PARTIALLY_SUCCEEDED if definition.continue_on_error else JobStatus.FAILED
             )

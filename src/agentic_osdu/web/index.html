@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic OSDU inventory review</title>
+  <script type="module" crossorigin src="/assets/inventory-Cram1__V.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/style-B3YooghB.js">
+  <link rel="stylesheet" crossorigin href="/assets/style-CzwIYrti.css">
+</head>
+<body>
+  <header>
+    <div><h1>Inventory review</h1><p id="summary" aria-live="polite">Loading inventory</p></div>
+  </header>
+  <main>
+    <section aria-labelledby="workspace-heading">
+      <h2 id="workspace-heading">Local workspace</h2>
+      <form onsubmit="return false">
+        <label>Workspace path <input id="workspace-path" autocomplete="off"></label>
+        <label>Generated output subpath (under generated/)
+          <input id="generated-output-subpath" required>
+        </label>
+        <label>Export output subpath <input id="export-output-subpath" required></label>
+        <label>Pinned schema catalog ID <input id="schema-catalog-id" required></label>
+        <button id="register" type="button">Register and discover</button>
+      </form>
+      <div id="progress-panel" hidden>
+        <label>Job progress <progress id="progress" max="1" value="0" aria-label="Job progress"></progress></label>
+        <button id="cancel" type="button">Cancel job</button>
+      </div>
+      <p id="message" role="status"></p>
+    </section>
+    <section aria-labelledby="filter-heading">
+      <h2 id="filter-heading">Filters</h2>
+      <div class="toolbar">
+        <label>Search inventory <input id="search" type="search"></label>
+        <label>Category <select id="category"><option value="">All</option><option>seismic</option><option>well_log</option></select></label>
+        <label>Format <select id="format"><option value="">All</option><option>FMT-001</option><option>FMT-002</option></select></label>
+        <label>Status <select id="status-filter"><option value="">All</option><option>proposed</option><option>approved</option><option>unassociated</option></select></label>
+      </div>
+      <div id="inventory"></div>
+    </section>
+    <section aria-labelledby="state-heading">
+      <h2 id="state-heading">State controls</h2>
+      <div class="actions">
+        <button id="learn" type="button">Learn patterns</button>
+        <button id="generate-all" type="button">Generate all missing</button>
+        <button id="reset" type="button">Archive and reset inventory</button>
+        <button id="deactivate-learning" type="button">Deactivate learning</button>
+        <button id="clear-learning" type="button">Clear learning</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

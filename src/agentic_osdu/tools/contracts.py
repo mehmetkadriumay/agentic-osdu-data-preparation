@@ -27,6 +27,7 @@ from agentic_osdu.domain.models import (
     FileSampleRef,
     FormatDetectionResult,
     FormatId,
+    GeneratedCandidateRef,
     GeneratedManifestCandidate,
     JobEventRef,
     JobRef,
@@ -760,6 +761,7 @@ class GenerationFilters(ContractModel):
 
 class GenerateAllManifestsInput(ContractModel):
     inventory_id: UUID
+    schema_catalog_id: UUID | None = None
     generation_policy_version: SemanticVersion
     filters: GenerationFilters = Field(default_factory=GenerationFilters)
     continue_on_error: bool = False
@@ -854,13 +856,17 @@ class InventoryMutation(ContractModel):
     files: tuple[FileAssetRef, ...] = ()
     detections: tuple[FormatDetectionResult, ...] = ()
     extractions: tuple[MetadataExtractionRef, ...] = ()
+    extracted_metadata: tuple[ExtractedMetadataContract, ...] = ()
     classifications: tuple[ClassificationRecord, ...] = ()
+    evidence: tuple[EvidenceRecord, ...] = ()
+    provenance: tuple[ProvenanceRecord, ...] = ()
     remove_file_ids: tuple[UUID, ...] = ()
 
 
 class PersistInventoryInput(ContractModel):
     mutation: InventoryMutation
     expected_state_version: int = Field(ge=0)
+    archive_before_reset: bool = False
 
 
 class InventorySnapshotRef(ContractModel):
@@ -868,6 +874,9 @@ class InventorySnapshotRef(ContractModel):
     state_version: int = Field(ge=1)
     file_count: int = Field(ge=0)
     created_at: Rfc3339Timestamp
+    archive_id: UUID | None = None
+    prior_state_version: int | None = Field(default=None, ge=1)
+    archived_file_count: int | None = Field(default=None, ge=0)
 
 
 class AssociationMutation(ContractModel):
@@ -936,6 +945,33 @@ class JobDefinition(ContractModel):
 class TrackJobInput(ContractModel):
     definition: JobDefinition
     deduplication_key: str = Field(min_length=1, max_length=256)
+    workflow_id: str | None = Field(default=None, pattern=r"^WF-00[1-7]$")
+    inventory_id: UUID | None = None
+    discovery: DiscoverFilesInput | None = None
+    generation: GenerateAllManifestsInput | None = None
+
+    @model_validator(mode="after")
+    def validate_workflow_input(self) -> TrackJobInput:
+        if self.workflow_id is None:
+            if any(
+                value is not None for value in (self.inventory_id, self.discovery, self.generation)
+            ):
+                raise ValueError("workflow inputs require a workflow ID")
+            return self
+        if self.workflow_id == "WF-001" and (
+            self.inventory_id is None or self.discovery is None or self.generation is not None
+        ):
+            raise ValueError("WF-001 requires inventory and discovery input only")
+        if self.workflow_id == "WF-005" and (
+            self.generation is None
+            or self.generation.schema_catalog_id is None
+            or self.inventory_id is not None
+            or self.discovery is not None
+        ):
+            raise ValueError("WF-005 requires generation input with a pinned schema catalog ID")
+        if self.workflow_id not in {"WF-001", "WF-005"}:
+            raise ValueError("only registered runtime workflow inputs are supported here")
+        return self
 
 
 class TrackJobOutput(ContractModel):
@@ -952,6 +988,15 @@ class QueryOrCancelJobInput(ContractModel):
     action: JobControlAction
     job_id: UUID
     after_event_sequence: int | None = Field(default=None, ge=0)
+
+
+class QueryJobEventsInput(ContractModel):
+    job_id: UUID
+    after_event_sequence: int | None = Field(default=None, ge=0)
+
+
+class CancelJobInput(ContractModel):
+    job_id: UUID
 
 
 class CancellationReceipt(ContractModel):
@@ -991,6 +1036,10 @@ class InventoryReviewItem(ContractModel):
     file: FileAssetRef
     classification: ClassificationRecord | None = None
     association: ManifestAssociation | None = None
+    candidate: GeneratedCandidateRef | None = None
+    manifest_sha256: Sha256 | None = None
+    evidence: tuple[EvidenceRecord, ...] = ()
+    provenance: tuple[ProvenanceRecord, ...] = ()
 
 
 class ReviewSummaryCount(ContractModel):
@@ -1000,6 +1049,8 @@ class ReviewSummaryCount(ContractModel):
 
 class InventoryReviewView(ContractModel):
     inventory_id: UUID
+    state_version: int = Field(default=1, ge=1)
+    active_learning_model: LearningModelVersionOutput | None = None
     total_count: int = Field(ge=0)
     category_summaries: tuple[ReviewSummaryCount, ...]
     format_summaries: tuple[ReviewSummaryCount, ...]
@@ -1008,8 +1059,15 @@ class InventoryReviewView(ContractModel):
 
 
 class BuildManifestReviewInput(ContractModel):
-    manifest: ManifestDocumentRef | GeneratedManifestCandidate
+    manifest: ManifestDocumentRef | GeneratedManifestCandidate | None = None
+    manifest_id: UUID | None = None
     source_file_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def require_one_manifest_target(self) -> BuildManifestReviewInput:
+        if (self.manifest is None) == (self.manifest_id is None):
+            raise ValueError("provide exactly one persisted manifest reference or manifest ID")
+        return self
 
 
 class GenerationDiff(ContractModel):
