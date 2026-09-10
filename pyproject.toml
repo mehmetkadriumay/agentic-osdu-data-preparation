@@ -19,10 +19,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
+    "alembic>=1.16,<2",
     "dlisio>=1,<2",
     "ijson>=3.3,<4",
     "jsonschema[format]>=4.23,<5",
     "pydantic>=2.11,<3",
+    "sqlalchemy>=2.0,<3",
 ]
 
 [project.urls]

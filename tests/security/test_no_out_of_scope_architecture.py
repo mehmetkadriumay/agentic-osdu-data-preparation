@@ -3,22 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_epic_006_does_not_create_later_architectural_packages_or_ci() -> None:
+def test_epic_007_does_not_create_later_architectural_packages_or_ci() -> None:
     root = Path(__file__).parents[2]
     prohibited = (
         ".github/workflows",
         "src/agentic_osdu/agents",
         "src/agentic_osdu/api",
-        "src/agentic_osdu/jobs",
         "src/agentic_osdu/migration",
-        "src/agentic_osdu/state",
         "web",
-        "migrations",
     )
     assert all(not (root / path).exists() for path in prohibited)
 
 
-def test_epic_006_contains_no_osdu_ingestion_or_unscoped_network_code() -> None:
+def test_epic_007_contains_no_osdu_ingestion_or_unscoped_network_code() -> None:
     root = Path(__file__).parents[2]
     package_files = (
         path
