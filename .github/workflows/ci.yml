@@ -14,9 +14,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  UV_FROZEN: "1"
-
 jobs:
   python-quality:
     name: Python quality
@@ -49,7 +46,7 @@ jobs:
           version: "0.8.22"
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest --ignore=tests/parity --ignore=tests/integration/rollback
+      - run: uv run --frozen pytest --ignore=tests/parity
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-data

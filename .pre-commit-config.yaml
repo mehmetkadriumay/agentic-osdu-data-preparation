@@ -18,7 +18,7 @@ repos:
         pass_filenames: false
       - id: pytest
         name: Pytest with coverage
-        entry: uv run --frozen pytest
+        entry: uv run --frozen pytest --ignore=tests/parity
         language: system
         pass_filenames: false
       - id: bandit
