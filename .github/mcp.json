@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "agentic-osdu-data-preparation": {
+      "type": "stdio",
+      "command": "agentic-osdu-mcp",
+      "args": [],
+      "tools": ["*"]
+    }
+  }
+}

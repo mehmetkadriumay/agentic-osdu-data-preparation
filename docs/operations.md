@@ -5,6 +5,42 @@ workers before restore, downgrade, or package rollback. OSDU ingestion is not a 
 of this project; operations cover preparation and human review only.
 No procedure reads from or writes to the `Volve` source tree.
 
+## MCP transports
+
+The `agentic-osdu-mcp` entry point runs the native MCP server over stdio and is
+the recommended Copilot CLI transport. The committed `.github/mcp.json`
+enables all 30 registered tools after repository trust is confirmed:
+
+```powershell
+agentic-osdu-mcp
+```
+
+The existing FastAPI service mounts Streamable HTTP at
+`http://127.0.0.1:8000/mcp/`:
+
+```powershell
+agentic-osdu web-serve --host 127.0.0.1 --port 8000
+copilot mcp add --transport http agentic-osdu-http http://127.0.0.1:8000/mcp/
+```
+
+The HTTP MCP transport is intentionally localhost-only and uses the MCP SDK's
+Host and Origin validation. Do not expose it through a non-loopback bind or
+reverse proxy without a separately reviewed authentication and transport
+security design.
+
+Every MCP call accepts the existing typed `ToolRequest` fields and returns the
+existing `ToolResult` structure or a redacted `ToolError` envelope. Configure
+`AGENTIC_OSDU_STATE_PATH` when the default user-state database is not desired.
+Stdio and HTTP processes that point at different state paths do not share
+runtime memory.
+
+MCP clients cannot assert human approval. Write-mode TOOL-018/019 requests,
+write-mode generation jobs through TOOL-025, remote TOOL-021 refreshes, and
+TOOL-029 human decisions fail closed at the MCP boundary. Use the existing
+signed approval and human review workflows for those actions. TOOL-030 still
+requires persisted approved content and approved output roots. No transport
+performs OSDU ingestion.
+
 ## Workspace policy
 
 Register an absolute local workspace through the UI, API, or CLI. Keep source
