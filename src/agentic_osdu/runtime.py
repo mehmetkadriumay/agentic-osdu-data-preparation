@@ -34,14 +34,16 @@ from agentic_osdu.jobs.service import JobCancelled, JobError, JobExecutionContex
 from agentic_osdu.manifests.generate import GenerationItem, GenerationService
 from agentic_osdu.manifests.learn import LearningMaterial, learn_manifest_patterns
 from agentic_osdu.manifests.match import match_manifest
-from agentic_osdu.manifests.parse import ManifestService
+from agentic_osdu.manifests.parse import ManifestService, extract_manifest_records
 from agentic_osdu.policy import PathStyle, WindowsAwarePathPolicy, WorkspaceAccessPolicy
 from agentic_osdu.schemas import SchemaCatalogStore, SchemaValidationService
+from agentic_osdu.schemas.catalog import SchemaCatalogError
 from agentic_osdu.state.database import StateDatabase, create_sqlite_state
 from agentic_osdu.state.models import Base
 from agentic_osdu.state.repositories import StateRepository
 from agentic_osdu.tools.contracts import (
     TOOL_REGISTRY,
+    ApprovedRemoteSchemaCatalogRefresh,
     BuildInventoryReviewInput,
     BuildManifestReviewInput,
     ClassifyDataInput,
@@ -56,6 +58,7 @@ from agentic_osdu.tools.contracts import (
     ExtractJsonWellLogInput,
     ExtractLasInput,
     ExtractLisInput,
+    ExtractManifestRecordsInput,
     ExtractP190Input,
     ExtractSegyInput,
     FileRecordContract,
@@ -75,6 +78,8 @@ from agentic_osdu.tools.contracts import (
     QueryOrCancelJobInput,
     ReadFileSampleInput,
     RecordReviewDecisionInput,
+    RefreshSchemaCatalogInput,
+    RefreshSchemaCatalogOutput,
     SampleMode,
     ToolRequest,
     ToolResult,
@@ -217,11 +222,13 @@ class RuntimeComposition:
                     "TOOL-013", extract_interpretation, request
                 ),
                 "TOOL-014": self._parse_manifests,
+                "TOOL-015": self._extract_manifest_records,
                 "TOOL-016": self._match_manifest,
                 "TOOL-017": self._learn_patterns,
                 "TOOL-018": self._generate_one,
                 "TOOL-019": self._generate_all,
                 "TOOL-020": self._validate,
+                "TOOL-021": self._refresh_schema_catalog,
                 "TOOL-022": self._persist_inventory,
                 "TOOL-023": self._persist_associations,
                 "TOOL-024": self._persist_learning,
@@ -392,6 +399,17 @@ class RuntimeComposition:
         value: MatchManifestInput = request.input
         return _result("TOOL-016", request, match_manifest(value))
 
+    def _extract_manifest_records(self, request: ToolRequest[Any]) -> ToolResult[Any]:
+        value: ExtractManifestRecordsInput = request.input
+        return _result(
+            "TOOL-015",
+            request,
+            extract_manifest_records(
+                value.manifest,
+                cancellation=self._current_cancellation(),
+            ),
+        )
+
     def _learn_patterns(self, request: ToolRequest[Any]) -> ToolResult[Any]:
         value: LearnManifestPatternsInput = request.input
         examples = self.repository.resolve_learning_examples(value.examples)
@@ -468,6 +486,24 @@ class RuntimeComposition:
                 actor=request.actor,
             )
         return result
+
+    def _refresh_schema_catalog(self, request: ToolRequest[Any]) -> ToolResult[Any]:
+        value: RefreshSchemaCatalogInput = request.input
+        source = value.root
+        if isinstance(source, ApprovedRemoteSchemaCatalogRefresh):
+            raise SchemaCatalogError(
+                "NETWORK_NOT_APPROVED",
+                "Remote schema refresh requires a trusted network approval.",
+            )
+        catalog = self.schema_catalog_store.import_local(
+            source,
+            cancellation=self._current_cancellation(),
+        )
+        return _result(
+            "TOOL-021",
+            request,
+            RefreshSchemaCatalogOutput(catalog=catalog),
+        )
 
     def _persist_inventory(self, request: ToolRequest[Any]) -> ToolResult[Any]:
         input_value: PersistInventoryInput = request.input

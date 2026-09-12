@@ -24,6 +24,7 @@ dependencies = [
     "fastapi>=0.116,<1",
     "ijson>=3.3,<4",
     "jsonschema[format]>=4.23,<5",
+    "mcp==2.2.0",
     "pydantic>=2.11,<3",
     "sqlalchemy>=2.0,<3",
     "uvicorn>=0.35,<1",
@@ -31,6 +32,7 @@ dependencies = [
 
 [project.scripts]
 agentic-osdu = "agentic_osdu.cli:entrypoint"
+agentic-osdu-mcp = "agentic_osdu.mcp_server:entrypoint"
 agentic-osdu-operations = "agentic_osdu.operations:entrypoint"
 
 [project.urls]

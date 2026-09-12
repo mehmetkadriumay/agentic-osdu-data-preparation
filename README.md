@@ -7,8 +7,9 @@ preparation workflows.
 
 Version 1.0 provides the approved deterministic tools, bounded agent workflows,
 transactional state and jobs, migration and parity validation, typed API and
-CLI, and local review UI. The final parity report contains 88 comparisons:
-85 equal, 3 intentional approved differences, and 0 blocking differences.
+CLI, local review UI, and native MCP transports. The final parity report
+contains 88 comparisons: 85 equal, 3 intentional approved differences, and
+0 blocking differences.
 
 ## Requirements
 
@@ -27,6 +28,31 @@ uv tool install .\dist\agentic_osdu_data_preparation-1.0.0-py3-none-any.whl
 agentic-osdu --help
 agentic-osdu web-serve --host 127.0.0.1 --port 8000
 ```
+
+## MCP server
+
+The official MCP Python SDK projects the existing typed `TOOL-001` through
+`TOOL-030` registry without duplicating domain logic.
+
+For Copilot CLI stdio, install the package and use the repository-level
+`.github/mcp.json`, or add it explicitly:
+
+```powershell
+copilot mcp add agentic-osdu-data-preparation -- agentic-osdu-mcp
+```
+
+For Streamable HTTP, start the existing loopback service:
+
+```powershell
+agentic-osdu web-serve --host 127.0.0.1 --port 8000
+copilot mcp add --transport http agentic-osdu-http http://127.0.0.1:8000/mcp/
+```
+
+Both transports use `create_runtime()` and the same typed registry. MCP does
+not add shell, unrestricted filesystem, or OSDU ingestion tools. Workspace
+roots remain explicitly approved and read-only. Write-mode generation, remote
+schema refresh, and human review decisions remain approval-gated; generated
+manifests remain review-required.
 
 ## Local quality gates
 

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 
@@ -16,6 +20,9 @@ from agentic_osdu.api.routes import RegisteredToolInvoker, router
 from agentic_osdu.domain.models import ToolError, ToolErrorCategory
 from agentic_osdu.jobs.service import JobError
 from agentic_osdu.tools.review import ReviewError
+
+if TYPE_CHECKING:
+    from mcp.server import MCPServer
 
 
 class ErrorEnvelope(BaseModel):
@@ -50,12 +57,47 @@ def create_app(
     tool_invoker: RegisteredToolInvoker,
     *,
     web_directory: Path | None = None,
+    mcp_server: MCPServer[None] | None = None,
 ) -> FastAPI:
+    mcp_http_app = (
+        mcp_server.streamable_http_app(
+            streamable_http_path="/",
+            json_response=True,
+            host="127.0.0.1",
+            transport_security=TransportSecuritySettings(
+                allowed_hosts=[
+                    "127.0.0.1",
+                    "127.0.0.1:*",
+                    "localhost",
+                    "localhost:*",
+                    "[::1]",
+                    "[::1]:*",
+                ],
+                allowed_origins=[
+                    "http://127.0.0.1:*",
+                    "http://localhost:*",
+                    "http://[::1]:*",
+                ],
+            ),
+        )
+        if mcp_server is not None
+        else None
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        if mcp_server is None:
+            yield
+            return
+        async with mcp_server.session_manager.run():
+            yield
+
     app = FastAPI(
         title="Agentic OSDU Data Preparation API",
         version="1.0.0",
         openapi_url="/api/v1/openapi.json",
         docs_url="/api/v1/docs",
+        lifespan=lifespan,
     )
     app.state.tool_invoker = tool_invoker
 
@@ -146,6 +188,8 @@ def create_app(
             503: {"model": ErrorEnvelope},
         },
     )
+    if mcp_http_app is not None:
+        app.mount("/mcp", mcp_http_app, name="mcp")
     if web_directory is not None:
         app.mount(
             "/",
