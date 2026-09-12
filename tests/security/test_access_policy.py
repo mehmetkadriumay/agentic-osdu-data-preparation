@@ -177,6 +177,23 @@ def test_approved_root_components_are_also_subject_to_no_follow_policy() -> None
     assert linked_root.value.error.code is PolicyErrorCode.LINK_NOT_ALLOWED
 
 
+def test_workspace_source_root_is_reinspected_before_exact_root_read() -> None:
+    workspace = WorkspaceAccessPolicy(
+        workspace_id=uuid4(),
+        source_root=r"C:\Approved\catalog",
+        output_roots={},
+        path_policy=WindowsAwarePathPolicy(
+            style=PathStyle.WINDOWS,
+            inspector=FakeLinkInspector(reparse_component="catalog"),
+        ),
+    )
+
+    with pytest.raises(PolicyViolation) as replaced_root:
+        workspace.authorize_read_root()
+
+    assert replaced_root.value.error.code is PolicyErrorCode.LINK_NOT_ALLOWED
+
+
 def test_workspace_policy_separates_read_only_source_and_configured_outputs() -> None:
     paths = WindowsAwarePathPolicy(style=PathStyle.WINDOWS)
     workspace = WorkspaceAccessPolicy(

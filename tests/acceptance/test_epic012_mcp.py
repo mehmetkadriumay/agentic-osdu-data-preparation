@@ -205,6 +205,29 @@ def test_streamable_http_supports_initialize_list_and_call() -> None:
         assert result["isError"] is False
         assert result["structuredContent"]["tool_id"] == "TOOL-001"
 
+        denied_learning = client.post(
+            "/mcp/",
+            headers=session_headers,
+            json=_rpc(
+                "tools/call",
+                request_id=4,
+                params={
+                    "name": mcp_tool_name(TOOL_REGISTRY["TOOL-024"]),
+                    "arguments": {
+                        **_workspace_request(),
+                        "input": {"mutation": {"action": "clear"}},
+                    },
+                },
+            ),
+        )
+        assert denied_learning.status_code == 200
+        denied_result = denied_learning.json()["result"]
+        assert denied_result["isError"] is True
+        assert denied_result["structuredContent"]["errors"][0]["code"] == (
+            "HUMAN_APPROVAL_REQUIRED"
+        )
+        assert [tool_id for tool_id, _request in invoker.calls] == ["TOOL-001"]
+
 
 def test_stdio_entrypoint_starts_and_speaks_mcp_protocol(tmp_path: Path) -> None:
     environment = os.environ.copy()
@@ -267,3 +290,34 @@ def test_packaging_and_repository_copilot_configuration_publish_the_stdio_server
         "args": [],
         "tools": ["*"],
     }
+
+
+def test_uv_lock_contains_only_portable_registry_artifacts() -> None:
+    root = Path(__file__).resolve().parents[2]
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+
+    def is_absolute_local(value: str) -> bool:
+        return value.startswith(("/", "\\\\", "file:")) or (
+            len(value) > 2 and value[1] == ":" and value[2] in {"/", "\\"}
+        )
+
+    for package in lock["package"]:
+        source = package.get("source", {})
+        assert not any(
+            is_absolute_local(value) for value in source.values() if isinstance(value, str)
+        )
+        if registry := source.get("registry"):
+            assert registry.startswith(("https://", "http://"))
+            artifacts = [*package.get("wheels", [])]
+            if sdist := package.get("sdist"):
+                artifacts.append(sdist)
+            assert artifacts
+            assert all(
+                artifact["url"].startswith(("https://", "http://")) for artifact in artifacts
+            )
+            assert all(artifact["hash"].startswith("sha256:") for artifact in artifacts)
+        artifacts = [*package.get("wheels", [])]
+        if sdist := package.get("sdist"):
+            artifacts.append(sdist)
+        for artifact in artifacts:
+            assert "path" not in artifact

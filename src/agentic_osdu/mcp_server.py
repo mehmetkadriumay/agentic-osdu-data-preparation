@@ -82,6 +82,13 @@ def _reject_unapproved_direct_action(tool_id: str, request: ToolRequest[Any]) ->
             "NETWORK_NOT_APPROVED",
             "Remote schema refresh requires a trusted network approval.",
         )
+    if tool_id == "TOOL-024":
+        from agentic_osdu.agents.orchestrator import OrchestrationError
+
+        raise OrchestrationError(
+            "HUMAN_APPROVAL_REQUIRED",
+            "Learning-model mutations must execute through the signed WF-003 approval boundary.",
+        )
     if tool_id == "TOOL-025" and (
         request.input.generation is not None and not request.input.generation.dry_run
     ):

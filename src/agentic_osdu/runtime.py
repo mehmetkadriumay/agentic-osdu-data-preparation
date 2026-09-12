@@ -12,6 +12,7 @@ from uuid import UUID, uuid4, uuid5
 
 from agentic_osdu.agents.orchestrator import OrchestrationError, ToolRegistryAdapter
 from agentic_osdu.domain.models import (
+    ApprovedAbsolutePath,
     EvidenceRecord,
     FileAssetRef,
     FormatId,
@@ -35,7 +36,12 @@ from agentic_osdu.manifests.generate import GenerationItem, GenerationService
 from agentic_osdu.manifests.learn import LearningMaterial, learn_manifest_patterns
 from agentic_osdu.manifests.match import match_manifest
 from agentic_osdu.manifests.parse import ManifestService, extract_manifest_records
-from agentic_osdu.policy import PathStyle, WindowsAwarePathPolicy, WorkspaceAccessPolicy
+from agentic_osdu.policy import (
+    PathStyle,
+    PolicyViolation,
+    WindowsAwarePathPolicy,
+    WorkspaceAccessPolicy,
+)
 from agentic_osdu.schemas import SchemaCatalogStore, SchemaValidationService
 from agentic_osdu.schemas.catalog import SchemaCatalogError
 from agentic_osdu.state.database import StateDatabase, create_sqlite_state
@@ -495,6 +501,22 @@ class RuntimeComposition:
                 "NETWORK_NOT_APPROVED",
                 "Remote schema refresh requires a trusted network approval.",
             )
+        policy = self._workspace_policy(request.workspace_id)
+        try:
+            relative_root = os.path.relpath(source.local_root.root, policy.source_root)
+            approved_root = (
+                policy.authorize_read_root().canonical_path
+                if relative_root == os.curdir
+                else policy.authorize_read(relative_root).canonical_path
+            )
+        except (OSError, ValueError, PolicyViolation) as error:
+            raise OrchestrationError(
+                "ROOT_POLICY_DENIED",
+                "The local schema catalog is outside the approved workspace root.",
+            ) from error
+        source = source.model_copy(
+            update={"local_root": ApprovedAbsolutePath(approved_root)},
+        )
         catalog = self.schema_catalog_store.import_local(
             source,
             cancellation=self._current_cancellation(),
