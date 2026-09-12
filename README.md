@@ -51,8 +51,11 @@ copilot mcp add --transport http agentic-osdu-http http://127.0.0.1:8000/mcp/
 Both transports use `create_runtime()` and the same typed registry. MCP does
 not add shell, unrestricted filesystem, or OSDU ingestion tools. Workspace
 roots remain explicitly approved and read-only. Write-mode generation, remote
-schema refresh, and human review decisions remain approval-gated; generated
-manifests remain review-required.
+schema refresh, learning-model mutations, and human review decisions remain
+approval-gated; generated manifests remain review-required. Local TOOL-021
+catalog imports must be contained by the persisted approved workspace root,
+and direct MCP TOOL-024 create, activate, deactivate, and clear calls fail
+closed because signed approval is available only through WF-003.
 
 ## Local quality gates
 

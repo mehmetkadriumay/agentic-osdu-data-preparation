@@ -36,10 +36,13 @@ runtime memory.
 
 MCP clients cannot assert human approval. Write-mode TOOL-018/019 requests,
 write-mode generation jobs through TOOL-025, remote TOOL-021 refreshes, and
-TOOL-029 human decisions fail closed at the MCP boundary. Use the existing
-signed approval and human review workflows for those actions. TOOL-030 still
-requires persisted approved content and approved output roots. No transport
-performs OSDU ingestion.
+TOOL-024 learning-model create/activate/deactivate/clear mutations and TOOL-029
+human decisions fail closed at the MCP boundary. Use WF-003's signed approval
+boundary for TOOL-024 and the existing signed approval and human review
+workflows for the other gated actions. Local TOOL-021 imports must resolve
+inside the request workspace's persisted approved source root before catalog
+files are inspected. TOOL-030 still requires persisted approved content and
+approved output roots. No transport performs OSDU ingestion.
 
 ## Workspace policy
 

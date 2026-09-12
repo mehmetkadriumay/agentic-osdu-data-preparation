@@ -107,6 +107,15 @@ class PathPolicy(Protocol):
 
     def contains(self, root: str, candidate: str) -> bool: ...
 
+    def authorize_root(
+        self,
+        root: str,
+        *,
+        follow_links: bool = False,
+        root_id: str = "approved",
+        read_only: bool = True,
+    ) -> AuthorizedPath: ...
+
     def authorize_child(
         self,
         root: str,
@@ -120,6 +129,8 @@ class PathPolicy(Protocol):
 
 class WorkspacePolicy(Protocol):
     """Interface exposing read-only workspace capabilities."""
+
+    def authorize_read_root(self, *, follow_links: bool = False) -> AuthorizedPath: ...
 
     def authorize_read(
         self,
@@ -443,27 +454,12 @@ class WindowsAwarePathPolicy:
     ) -> AuthorizedPath:
         """Authorize a normalized child path without opening it."""
 
-        canonical_root = self.approve_root(root)
-        root_has_link = any(
-            self._is_link_or_reparse(
-                component_path,
-                path_classification="approved_root_inspection",
-            )
-            for component_path in self._root_component_paths(canonical_root)
-        )
-        if root_has_link and not follow_links:
-            self._raise(
-                PolicyErrorCode.LINK_NOT_ALLOWED,
-                "Approved roots containing links or reparse points are not followed by default.",
-                path_classification="approved_root_link",
-            )
-        if root_has_link:
-            canonical_root = self.approve_root(
-                self._resolve(
-                    canonical_root,
-                    path_classification="approved_root_resolution",
-                )
-            )
+        canonical_root = self.authorize_root(
+            root,
+            follow_links=follow_links,
+            root_id=root_id,
+            read_only=read_only,
+        ).canonical_path
         if not requested or "\x00" in requested:
             self._raise(
                 PolicyErrorCode.INVALID_COMPONENT,
@@ -524,6 +520,46 @@ class WindowsAwarePathPolicy:
             canonical_path=candidate,
             canonical_root=canonical_root,
             relative_path=relative,
+            root_id=root_id,
+            read_only=read_only,
+        )
+
+    def authorize_root(
+        self,
+        root: str,
+        *,
+        follow_links: bool = False,
+        root_id: str = "approved",
+        read_only: bool = True,
+    ) -> AuthorizedPath:
+        """Reauthorize an approved root without opening it."""
+
+        canonical_root = self.approve_root(root)
+        root_has_link = any(
+            self._is_link_or_reparse(
+                component_path,
+                path_classification="approved_root_inspection",
+            )
+            for component_path in self._root_component_paths(canonical_root)
+        )
+        if root_has_link and not follow_links:
+            self._raise(
+                PolicyErrorCode.LINK_NOT_ALLOWED,
+                "Approved roots containing links or reparse points are not followed by default.",
+                path_classification="approved_root_link",
+            )
+        if root_has_link:
+            canonical_root = self.approve_root(
+                self._resolve(
+                    canonical_root,
+                    path_classification="approved_root_resolution",
+                )
+            )
+
+        return AuthorizedPath(
+            canonical_path=canonical_root,
+            canonical_root=canonical_root,
+            relative_path="",
             root_id=root_id,
             read_only=read_only,
         )
@@ -638,6 +674,14 @@ class WorkspaceAccessPolicy:
     @property
     def output_roots(self) -> Mapping[str, str]:
         return self._output_roots
+
+    def authorize_read_root(self, *, follow_links: bool = False) -> AuthorizedPath:
+        return self._path_policy.authorize_root(
+            self._source_root,
+            follow_links=follow_links,
+            root_id="source",
+            read_only=True,
+        )
 
     def authorize_read(
         self,
