@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import stat
 from dataclasses import replace
@@ -52,6 +53,10 @@ class NoInvocationInvoker:
         del request
         self.calls.append(tool_id)
         raise AssertionError("The approval boundary must reject before registry dispatch.")
+
+
+_MALFORMED_PATH_SENTINEL = r"C:\TOP-SECRET\credentials.json"
+_MALFORMED_CREDENTIAL_SENTINEL = "SECRET_TOKEN_EPIC_012"
 
 
 def _request(
@@ -113,6 +118,36 @@ def test_mcp_maps_expected_and_unexpected_failures_without_sensitive_details() -
     assert unexpected.structured_content["errors"][0]["code"] == "TOOL_EXECUTION_FAILED"
     assert "password" not in str(unexpected.structured_content)
     assert "Sensitive" not in str(unexpected.structured_content)
+
+
+def test_mcp_tool_manager_redacts_malformed_request_envelope(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    invoker = NoInvocationInvoker()
+
+    result = asyncio.run(
+        create_mcp_server(invoker).call_tool(
+            mcp_tool_name(TOOL_REGISTRY["TOOL-001"]),
+            {
+                "input": {
+                    "root_path": _MALFORMED_PATH_SENTINEL,
+                    "api_token": _MALFORMED_CREDENTIAL_SENTINEL,
+                }
+            },
+        )
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert result.structured_content is not None
+    assert result.structured_content["errors"][0]["code"] == "TOOL_INPUT_INVALID"
+    serialized = json.dumps(result.model_dump(mode="json"))
+    logs = caplog.text
+    for sentinel in (_MALFORMED_PATH_SENTINEL, _MALFORMED_CREDENTIAL_SENTINEL):
+        assert sentinel not in serialized
+        assert sentinel not in logs
+    assert invoker.calls == []
 
 
 def test_mcp_cannot_bypass_generation_or_network_approval_boundaries() -> None:
