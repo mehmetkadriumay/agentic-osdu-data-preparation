@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import stat
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -14,9 +17,13 @@ from agentic_osdu.agents.orchestrator import OrchestrationError
 from agentic_osdu.domain.models import ActorRef
 from agentic_osdu.mcp_server import create_mcp_server, mcp_tool_name
 from agentic_osdu.runtime import create_runtime
+from agentic_osdu.schemas import catalog as catalog_module
 from agentic_osdu.tools.contracts import (
     TOOL_REGISTRY,
+    LocalSchemaCatalogImport,
     RegisterWorkspaceInput,
+    SchemaCatalogSource,
+    SchemaChecksum,
     ToolRequest,
     ToolResult,
 )
@@ -279,6 +286,675 @@ def test_mcp_local_schema_import_requires_the_workspace_approved_root(tmp_path: 
         assert approved.structured_content["status"] == "succeeded"
     finally:
         runtime.database.dispose()
+
+
+def test_mcp_schema_import_rejects_root_identity_swap_before_consuming_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    approved_catalog = workspace_root / "catalog"
+    relative = Path("manifest") / "Manifest.1.0.0.json"
+    payload = b'{"schema":{"type":"object","title":"external"}}'
+    target = approved_catalog / relative
+    target.parent.mkdir(parents=True)
+    target.write_bytes(payload)
+
+    runtime = create_runtime(tmp_path / "state.db")
+    try:
+        registered = runtime.registry.invoke(
+            "TOOL-001",
+            ToolRequest[RegisterWorkspaceInput](
+                request_id=uuid4(),
+                workspace_id=uuid4(),
+                actor=ActorRef(actor_id="human.operator"),
+                input=RegisterWorkspaceInput(root_path=str(workspace_root)),
+            ),
+        )
+        assert registered.output is not None
+        workspace_id = registered.output.workspace_id
+
+        original_open = catalog_module._open_bound_descriptor
+        identity_checks = 0
+
+        def swapped_identity(
+            path: Path,
+            *,
+            require_directory: bool = False,
+            require_file: bool = False,
+            error_code: str = "ROOT_POLICY_DENIED",
+        ) -> Any:
+            nonlocal identity_checks
+            descriptor, identity, physical_path = original_open(
+                path,
+                require_directory=require_directory,
+                require_file=require_file,
+                error_code=error_code,
+            )
+            if path == approved_catalog:
+                identity_checks += 1
+                if identity_checks > 1:
+                    identity = replace(identity, inode=identity.inode + 1)
+            return descriptor, identity, physical_path
+
+        external_bytes_consumed = False
+        original_read = catalog_module._read_bound_file
+
+        def record_read(*args: Any, **kwargs: Any) -> bytes:
+            nonlocal external_bytes_consumed
+            external_bytes_consumed = True
+            return original_read(*args, **kwargs)
+
+        monkeypatch.setattr(catalog_module, "_open_bound_descriptor", swapped_identity)
+        monkeypatch.setattr(catalog_module, "_read_bound_file", record_read)
+
+        denied = _call(
+            "TOOL-021",
+            runtime.registry,
+            {
+                "source": "local_export",
+                "revision": "epic-012-race",
+                "local_root": str(approved_catalog),
+                "expected_checksums": [
+                    {
+                        "relative_path": relative.as_posix(),
+                        "sha256": sha256(payload).hexdigest(),
+                    }
+                ],
+            },
+            workspace_id=workspace_id,
+        )
+
+        assert denied.is_error is True
+        assert denied.structured_content is not None
+        assert denied.structured_content["errors"][0]["code"] == "ROOT_POLICY_DENIED"
+        assert external_bytes_consumed is False
+    finally:
+        runtime.database.dispose()
+
+
+def test_mcp_schema_import_rejects_workspace_replaced_after_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    runtime = create_runtime(tmp_path / "state.db")
+    try:
+        registered = runtime.registry.invoke(
+            "TOOL-001",
+            ToolRequest[RegisterWorkspaceInput](
+                request_id=uuid4(),
+                workspace_id=uuid4(),
+                actor=ActorRef(actor_id="human.operator"),
+                input=RegisterWorkspaceInput(root_path=str(workspace_root)),
+            ),
+        )
+        assert registered.output is not None
+
+        approved_root = tmp_path / "approved-root"
+        workspace_root.rename(approved_root)
+        relative = Path("catalog") / "manifest" / "Manifest.1.0.0.json"
+        external_payload = b'{"schema":{"type":"object","title":"outside-approved-root"}}'
+        replacement_target = workspace_root / relative
+        replacement_target.parent.mkdir(parents=True)
+        replacement_target.write_bytes(external_payload)
+
+        external_bytes_consumed = False
+        original_read = os.read
+
+        def record_external_read(descriptor: int, size: int) -> bytes:
+            nonlocal external_bytes_consumed
+            if catalog_module._physical_path_from_descriptor(
+                descriptor,
+                replacement_target,
+            ) == catalog_module._normalize_physical_path(str(replacement_target)):
+                external_bytes_consumed = True
+            return original_read(descriptor, size)
+
+        monkeypatch.setattr(os, "read", record_external_read)
+        denied = _call(
+            "TOOL-021",
+            runtime.registry,
+            {
+                "source": "local_export",
+                "revision": "epic-012-approved-root-swap",
+                "local_root": str(workspace_root / "catalog"),
+                "expected_checksums": [
+                    {
+                        "relative_path": "manifest/Manifest.1.0.0.json",
+                        "sha256": sha256(external_payload).hexdigest(),
+                    }
+                ],
+            },
+            workspace_id=registered.output.workspace_id,
+        )
+
+        assert denied.is_error is True
+        assert denied.structured_content is not None
+        assert denied.structured_content["errors"][0]["code"] == "ROOT_POLICY_DENIED"
+        assert str(approved_root) not in str(denied.structured_content)
+        assert str(workspace_root) not in str(denied.structured_content)
+        assert external_bytes_consumed is False
+    finally:
+        runtime.database.dispose()
+
+
+def test_bound_schema_read_rejects_outside_descriptor_before_consuming_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approved_root = tmp_path / "approved"
+    approved_target = approved_root / "manifest" / "Manifest.1.0.0.json"
+    approved_target.parent.mkdir(parents=True)
+    approved_target.write_bytes(b'{"schema":{"type":"object"}}')
+    outside_target = tmp_path / "outside.json"
+    outside_target.write_bytes(b'{"schema":{"title":"outside-approved-root"}}')
+    capability = catalog_module.LocalSchemaReadCapability.capture(approved_root)
+    original_open = catalog_module._open_bound_descriptor
+    outside_descriptor: int | None = None
+    external_bytes_consumed = False
+
+    def redirect_file_open(
+        path: Path,
+        *,
+        require_directory: bool = False,
+        require_file: bool = False,
+        error_code: str = "ROOT_POLICY_DENIED",
+    ) -> Any:
+        nonlocal outside_descriptor
+        if path == approved_target:
+            descriptor, identity, physical_path = original_open(
+                outside_target,
+                require_file=True,
+                error_code=error_code,
+            )
+            outside_descriptor = descriptor
+            return descriptor, identity, physical_path
+        return original_open(
+            path,
+            require_directory=require_directory,
+            require_file=require_file,
+            error_code=error_code,
+        )
+
+    original_read = os.read
+
+    def record_external_read(descriptor: int, size: int) -> bytes:
+        nonlocal external_bytes_consumed
+        if descriptor == outside_descriptor:
+            external_bytes_consumed = True
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(catalog_module, "_open_bound_descriptor", redirect_file_open)
+    monkeypatch.setattr(os, "read", record_external_read)
+    try:
+        with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+            catalog_module._read_bound_file(
+                capability,
+                "manifest/Manifest.1.0.0.json",
+            )
+        assert external_bytes_consumed is False
+    finally:
+        capability.close()
+
+
+def test_mcp_schema_import_does_not_activate_when_source_changes_after_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    approved_catalog = workspace_root / "catalog"
+    relative = Path("manifest") / "Manifest.1.0.0.json"
+    payload = b'{"schema":{"type":"object"}}'
+    target = approved_catalog / relative
+    target.parent.mkdir(parents=True)
+    target.write_bytes(payload)
+
+    runtime = create_runtime(tmp_path / "state.db")
+    try:
+        registered = runtime.registry.invoke(
+            "TOOL-001",
+            ToolRequest[RegisterWorkspaceInput](
+                request_id=uuid4(),
+                workspace_id=uuid4(),
+                actor=ActorRef(actor_id="human.operator"),
+                input=RegisterWorkspaceInput(root_path=str(workspace_root)),
+            ),
+        )
+        assert registered.output is not None
+        original_read = catalog_module._read_bound_file
+
+        def replace_after_read(
+            capability: catalog_module.LocalSchemaReadCapability,
+            relative_path: str,
+        ) -> bytes:
+            consumed = original_read(capability, relative_path)
+            observed_path = capability.root / Path(relative_path)
+            identity = capability._observed_files[observed_path]
+            capability._observed_files[observed_path] = replace(
+                identity,
+                inode=identity.inode + 1,
+            )
+            return consumed
+
+        monkeypatch.setattr(catalog_module, "_read_bound_file", replace_after_read)
+        denied = _call(
+            "TOOL-021",
+            runtime.registry,
+            {
+                "source": "local_export",
+                "revision": "epic-012-post-read-race",
+                "local_root": str(approved_catalog),
+                "expected_checksums": [
+                    {
+                        "relative_path": relative.as_posix(),
+                        "sha256": sha256(payload).hexdigest(),
+                    }
+                ],
+            },
+            workspace_id=registered.output.workspace_id,
+        )
+
+        assert denied.is_error is True
+        assert denied.structured_content is not None
+        assert denied.structured_content["errors"][0]["code"] == "ROOT_POLICY_DENIED"
+        with pytest.raises(catalog_module.SchemaCatalogError, match="SCHEMA_UNAVAILABLE"):
+            runtime.schema_catalog_store.active_catalog()
+    finally:
+        runtime.database.dispose()
+
+
+def test_local_schema_capability_rejects_root_and_observation_identity_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approved_root = tmp_path / "approved"
+    other_root = tmp_path / "other"
+    observed_directory = approved_root / "manifest"
+    observed_file = observed_directory / "Manifest.1.0.0.json"
+    observed_directory.mkdir(parents=True)
+    other_root.mkdir()
+    observed_file.write_bytes(b'{"schema":{"type":"object"}}')
+    capability = catalog_module.LocalSchemaReadCapability.capture(approved_root)
+
+    request = LocalSchemaCatalogImport(
+        source=SchemaCatalogSource.LOCAL_EXPORT,
+        revision="epic-012-capability-mismatch",
+        local_root=str(other_root),
+        expected_checksums=(
+            SchemaChecksum(
+                relative_path="manifest/Manifest.1.0.0.json",
+                sha256="0" * 64,
+            ),
+        ),
+    )
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module.SchemaCatalogStore(tmp_path / "cache").import_local(
+            request,
+            capability=capability,
+        )
+
+    capability = catalog_module.LocalSchemaReadCapability.capture(approved_root)
+    capability.observe_directory(observed_directory)
+    held_after_directory = len(capability._descriptors)
+    capability.observe_directory(observed_directory)
+    assert len(capability._descriptors) == held_after_directory
+    descriptor, file_identity, _ = catalog_module._open_bound_descriptor(
+        observed_file,
+        require_file=True,
+    )
+    try:
+        capability.observe_file(observed_file, file_identity, descriptor)
+        held_after_file = len(capability._descriptors)
+        capability.observe_file(observed_file, file_identity, descriptor)
+        assert len(capability._descriptors) == held_after_file
+        with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+            capability.observe_file(
+                observed_file,
+                replace(file_identity, inode=file_identity.inode + 1),
+                descriptor,
+            )
+    finally:
+        os.close(descriptor)
+
+    original_open = catalog_module._open_bound_descriptor
+
+    def changed_directory_identity(
+        path: Path,
+        *,
+        require_directory: bool = False,
+        require_file: bool = False,
+        error_code: str = "ROOT_POLICY_DENIED",
+    ) -> Any:
+        descriptor, identity, physical_path = original_open(
+            path,
+            require_directory=require_directory,
+            require_file=require_file,
+            error_code=error_code,
+        )
+        if path == observed_directory:
+            identity = replace(identity, inode=identity.inode + 1)
+        return descriptor, identity, physical_path
+
+    monkeypatch.setattr(catalog_module, "_open_bound_descriptor", changed_directory_identity)
+    try:
+        with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+            capability.observe_directory(observed_directory)
+    finally:
+        capability.close()
+
+
+def test_bound_schema_paths_fail_closed_for_invalid_filesystem_objects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / "catalog"
+    file_path = directory / "schema.json"
+    directory.mkdir()
+    file_path.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(catalog_module.SchemaCatalogError, match="CATALOG_INCOMPLETE"):
+        catalog_module._open_bound_descriptor(
+            tmp_path / "missing",
+            require_file=True,
+            error_code="CATALOG_INCOMPLETE",
+        )
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module._open_bound_descriptor(file_path, require_directory=True)
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module._open_bound_descriptor(directory, require_file=True)
+
+    monkeypatch.setattr(catalog_module, "_is_link_or_reparse", lambda _: True)
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module._open_bound_descriptor(file_path, require_file=True)
+
+
+def test_bound_schema_paths_require_original_physical_root_and_identity(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module._require_physical_containment(root, outside)
+
+    descriptor, identity, physical_root = catalog_module._open_bound_descriptor(
+        root,
+        require_directory=True,
+    )
+    os.close(descriptor)
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module._require_same_identity_and_location(
+            root,
+            replace(identity, inode=identity.inode + 1),
+            physical_root,
+            require_directory=True,
+        )
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module._require_same_identity_and_exact_location(
+            root,
+            identity,
+            outside,
+            require_directory=True,
+        )
+
+    assert catalog_module._normalize_physical_path(r"\\?\C:\catalog") == Path(r"c:\catalog")
+    assert catalog_module._normalize_physical_path(r"\\?\UNC\server\catalog") == Path(
+        r"\\server\catalog"
+    )
+
+
+def test_local_schema_capability_rejects_intermediate_path_redirection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    catalog = workspace / "nested" / "catalog"
+    outside = tmp_path / "outside"
+    catalog.mkdir(parents=True)
+    outside.mkdir()
+    anchor = catalog_module.LocalSchemaReadCapability.capture(workspace)
+    original_open = catalog_module._open_bound_descriptor
+
+    def redirected_component(
+        path: Path,
+        *,
+        require_directory: bool = False,
+        require_file: bool = False,
+        error_code: str = "ROOT_POLICY_DENIED",
+    ) -> Any:
+        descriptor, identity, physical_path = original_open(
+            path,
+            require_directory=require_directory,
+            require_file=require_file,
+            error_code=error_code,
+        )
+        if path == workspace / "nested":
+            physical_path = outside
+        return descriptor, identity, physical_path
+
+    monkeypatch.setattr(catalog_module, "_open_bound_descriptor", redirected_component)
+    try:
+        with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+            catalog_module.LocalSchemaReadCapability.capture(
+                catalog,
+                error_code="ROOT_POLICY_DENIED",
+                anchor=anchor,
+            )
+    finally:
+        anchor.close()
+
+
+def test_local_schema_capability_handles_same_root_anchor_and_outside_rejection(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+
+    anchor = catalog_module.LocalSchemaReadCapability.capture(workspace)
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module.LocalSchemaReadCapability.capture(
+            outside,
+            error_code="ROOT_POLICY_DENIED",
+            anchor=anchor,
+        )
+
+    same_root = catalog_module.LocalSchemaReadCapability.capture(
+        workspace,
+        error_code="ROOT_POLICY_DENIED",
+        anchor=anchor,
+    )
+    assert same_root.identity_tuple == anchor.identity_tuple
+    same_root.close()
+    assert same_root._descriptors == []
+    assert same_root._anchor is None
+
+    drive_root = catalog_module.LocalSchemaReadCapability.capture(Path(tmp_path.anchor))
+    assert drive_root.root == Path(tmp_path.anchor)
+    drive_root.close()
+
+
+def test_workspace_capability_rejects_unanchored_ancestor_redirection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    original_open = catalog_module._open_bound_descriptor
+
+    def redirected_ancestor(
+        path: Path,
+        *,
+        require_directory: bool = False,
+        require_file: bool = False,
+        error_code: str = "ROOT_POLICY_DENIED",
+    ) -> Any:
+        descriptor, identity, physical_path = original_open(
+            path,
+            require_directory=require_directory,
+            require_file=require_file,
+            error_code=error_code,
+        )
+        if path == workspace.parent:
+            physical_path = outside
+        return descriptor, identity, physical_path
+
+    monkeypatch.setattr(catalog_module, "_open_bound_descriptor", redirected_ancestor)
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module.LocalSchemaReadCapability.capture(
+            workspace,
+            error_code="ROOT_POLICY_DENIED",
+        )
+
+
+def test_bound_descriptor_maps_windows_reparse_open_failure_to_policy_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reparse_open_failure(path: Path, *, require_directory: bool) -> int:
+        del path, require_directory
+        error = OSError(22, "reparse open denied")
+        error.winerror = 1920
+        raise error
+
+    monkeypatch.setattr(catalog_module, "_open_windows_descriptor", reparse_open_failure)
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        catalog_module._open_bound_descriptor(tmp_path / "reparse", require_directory=True)
+
+
+def test_mcp_schema_import_requires_an_approved_persisted_workspace(tmp_path: Path) -> None:
+    runtime = create_runtime(tmp_path / "state.db")
+    try:
+        denied = _call(
+            "TOOL-021",
+            runtime.registry,
+            {
+                "source": "local_export",
+                "revision": "epic-012-missing-workspace",
+                "local_root": str(tmp_path / "catalog"),
+                "expected_checksums": [
+                    {
+                        "relative_path": "manifest/Manifest.1.0.0.json",
+                        "sha256": "0" * 64,
+                    }
+                ],
+            },
+        )
+        assert denied.is_error is True
+        assert denied.structured_content is not None
+        assert denied.structured_content["errors"][0]["code"] == "ROOT_POLICY_DENIED"
+        assert str(tmp_path) not in str(denied.structured_content)
+    finally:
+        runtime.database.dispose()
+
+
+def test_bound_schema_read_rejects_oversized_local_schema(tmp_path: Path) -> None:
+    approved_root = tmp_path / "approved"
+    target = approved_root / "schema.json"
+    approved_root.mkdir()
+    target.write_bytes(b"x" * (catalog_module._MAX_SCHEMA_BYTES + 1))
+    capability = catalog_module.LocalSchemaReadCapability.capture(approved_root)
+    try:
+        with pytest.raises(catalog_module.SchemaCatalogError, match="CATALOG_INCOMPLETE"):
+            catalog_module._read_bound_file(capability, "schema.json")
+    finally:
+        capability.close()
+
+
+def test_bound_schema_read_rejects_file_identity_change_before_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approved_root = tmp_path / "approved"
+    target = approved_root / "schema.json"
+    approved_root.mkdir()
+    target.write_text("{}", encoding="utf-8")
+    capability = catalog_module.LocalSchemaReadCapability.capture(approved_root)
+    original_identity = catalog_module._identity_from_metadata
+    regular_file_checks = 0
+
+    def changed_file_identity(metadata: os.stat_result) -> Any:
+        nonlocal regular_file_checks
+        identity = original_identity(metadata)
+        if stat.S_ISREG(metadata.st_mode):
+            regular_file_checks += 1
+            if regular_file_checks > 1:
+                return replace(identity, inode=identity.inode + 1)
+        return identity
+
+    monkeypatch.setattr(catalog_module.LocalSchemaReadCapability, "validate", lambda self: None)
+    monkeypatch.setattr(catalog_module, "_identity_from_metadata", changed_file_identity)
+    try:
+        with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+            catalog_module._read_bound_file(capability, "schema.json")
+    finally:
+        capability.close()
+
+
+def test_pre_cancelled_local_import_closes_supplied_capability(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    capability = catalog_module.LocalSchemaReadCapability.capture(source)
+    request = LocalSchemaCatalogImport(
+        source=SchemaCatalogSource.LOCAL_EXPORT,
+        revision="epic-012-pre-cancelled",
+        local_root=str(source),
+        expected_checksums=(
+            SchemaChecksum(
+                relative_path="manifest/Manifest.1.0.0.json",
+                sha256="0" * 64,
+            ),
+        ),
+    )
+
+    with pytest.raises(catalog_module.SchemaCatalogError, match="CANCELLED"):
+        catalog_module.SchemaCatalogStore(tmp_path / "cache").import_local(
+            request,
+            cancellation=lambda: True,
+            capability=capability,
+        )
+
+    assert capability._descriptors == []
+
+
+def test_local_schema_install_rolls_back_catalog_if_post_publish_validation_fails(
+    tmp_path: Path,
+) -> None:
+    payload = b'{"schema":{"type":"object"}}'
+    checksum = SchemaChecksum(
+        relative_path="manifest/Manifest.1.0.0.json",
+        sha256=sha256(payload).hexdigest(),
+    )
+    validation_count = 0
+
+    def validate_source() -> None:
+        nonlocal validation_count
+        validation_count += 1
+        if validation_count == 2:
+            raise catalog_module.SchemaCatalogError(
+                "ROOT_POLICY_DENIED",
+                "The approved local schema path changed during import.",
+            )
+
+    store = catalog_module.SchemaCatalogStore(tmp_path / "cache")
+    with pytest.raises(catalog_module.SchemaCatalogError, match="ROOT_POLICY_DENIED"):
+        store._install(
+            revision="epic-012-publish-race",
+            source=f"local_export:{tmp_path / 'source'}",
+            expected=(checksum,),
+            reader=lambda _: payload,
+            cancellation=None,
+            before_publish=validate_source,
+        )
+
+    assert store.list_catalogs() == ()
+    with pytest.raises(catalog_module.SchemaCatalogError, match="SCHEMA_UNAVAILABLE"):
+        store.active_catalog()
 
 
 def test_mcp_surface_adds_no_shell_filesystem_or_osdu_ingestion_tools() -> None:

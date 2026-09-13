@@ -41,8 +41,15 @@ human decisions fail closed at the MCP boundary. Use WF-003's signed approval
 boundary for TOOL-024 and the existing signed approval and human review
 workflows for the other gated actions. Local TOOL-021 imports must resolve
 inside the request workspace's persisted approved source root before catalog
-files are inspected. TOOL-030 still requires persisted approved content and
-approved output roots. No transport performs OSDU ingestion.
+files are inspected. The import binds to that directory's filesystem identity,
+rejects symlinks, junctions, and reparse points, and revalidates the root and
+each traversed directory around file reads and after installation. TOOL-030
+still requires persisted approved content and approved output roots. No
+transport performs OSDU ingestion.
+
+Workspace policy fingerprints include the approved root's filesystem identity.
+Workspaces registered before this identity binding was introduced fail closed
+for TOOL-021 and must be registered again before importing a local catalog.
 
 ## Workspace policy
 
