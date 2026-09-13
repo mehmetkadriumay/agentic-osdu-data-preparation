@@ -15,6 +15,7 @@ import pytest
 from mcp_types import CallToolResult
 
 from agentic_osdu.agents.orchestrator import OrchestrationError
+from agentic_osdu.agents.workflows import WorkflowId, build_workflow_plan
 from agentic_osdu.domain.models import ActorRef
 from agentic_osdu.mcp_server import create_mcp_server, mcp_tool_name
 from agentic_osdu.runtime import create_runtime
@@ -57,6 +58,7 @@ class NoInvocationInvoker:
 
 _MALFORMED_PATH_SENTINEL = r"C:\TOP-SECRET\credentials.json"
 _MALFORMED_CREDENTIAL_SENTINEL = "SECRET_TOKEN_EPIC_012"
+_EXPORT_SENTINEL = "SECRET_EXPORT_EPIC_012"
 
 
 def _request(
@@ -240,6 +242,114 @@ def _learning_model_payload() -> dict[str, object]:
         "component_envelope": {},
         "dataset_envelope": {},
     }
+
+
+def test_every_workflow_approval_step_is_rejected_before_direct_mcp_dispatch(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    approval_gated_tool_ids = {
+        step.tool_id
+        for workflow_id in WorkflowId
+        for step in build_workflow_plan(workflow_id).steps
+        if step.requires_approval
+    }
+    approval_gated_inputs: dict[str, dict[str, object]] = {
+        "TOOL-018": {
+            "file_id": str(uuid4()),
+            "learning_model_id": str(uuid4()),
+            "generation_policy_version": "1.0.0",
+            "dry_run": False,
+        },
+        "TOOL-024": {"mutation": {"action": "clear"}},
+        "TOOL-025": {
+            "definition": {
+                "job_type": "approval-audit",
+                "steps": [{"sequence": 1, "tool_id": "TOOL-020", "input_ref": "validation"}],
+            },
+            "deduplication_key": "epic-012-approval-audit",
+            "workflow_id": "WF-005",
+            "generation": {
+                "inventory_id": str(uuid4()),
+                "schema_catalog_id": str(uuid4()),
+                "generation_policy_version": "1.0.0",
+                "dry_run": True,
+            },
+        },
+        "TOOL-029": {
+            "decision": {
+                "decision_id": str(uuid4()),
+                "actor": {"actor_id": "human.operator"},
+                "target_type": "generated_candidate",
+                "target_id": str(uuid4()),
+                "target_version": "1",
+                "decision": "approve",
+                "reason": "approval audit",
+                "decided_at": "2026-09-12T20:00:00Z",
+            }
+        },
+        "TOOL-030": {
+            "request": {
+                "export_kind": "approved_manifest",
+                "target_id": str(uuid4()),
+                "output_root_id": "generated",
+                "relative_path": f"exports/{_EXPORT_SENTINEL}.json",
+                "expected_target_version": _EXPORT_SENTINEL,
+            }
+        },
+    }
+    assert approval_gated_tool_ids == set(approval_gated_inputs)
+
+    invoker = NoInvocationInvoker()
+    for tool_id in sorted(approval_gated_tool_ids):
+        result = _call(tool_id, invoker, approval_gated_inputs[tool_id])
+        assert result.is_error is True
+        assert result.structured_content is not None
+        assert result.structured_content["errors"][0]["code"] == "HUMAN_APPROVAL_REQUIRED"
+        assert _EXPORT_SENTINEL not in json.dumps(result.model_dump(mode="json"))
+    assert invoker.calls == []
+    assert _EXPORT_SENTINEL not in caplog.text
+
+
+def test_direct_mcp_preserves_non_approval_job_dispatch() -> None:
+    invoker = NoInvocationInvoker()
+
+    result = _call(
+        "TOOL-025",
+        invoker,
+        {
+            "definition": {
+                "job_type": "generic-audit",
+                "steps": [{"sequence": 1, "tool_id": "TOOL-020", "input_ref": "validation"}],
+            },
+            "deduplication_key": "epic-012-generic-job",
+        },
+    )
+
+    assert result.is_error is True
+    assert result.structured_content is not None
+    assert result.structured_content["errors"][0]["code"] == "TOOL_EXECUTION_FAILED"
+    assert invoker.calls == ["TOOL-025"]
+
+
+def test_direct_mcp_preserves_ungated_generation_dry_run_dispatch() -> None:
+    invoker = NoInvocationInvoker()
+
+    result = _call(
+        "TOOL-018",
+        invoker,
+        {
+            "file_id": str(uuid4()),
+            "learning_model_id": str(uuid4()),
+            "generation_policy_version": "1.0.0",
+            "dry_run": True,
+        },
+    )
+
+    assert result.is_error is True
+    assert result.structured_content is not None
+    assert result.structured_content["errors"][0]["code"] == "TOOL_EXECUTION_FAILED"
+    assert invoker.calls == ["TOOL-018"]
 
 
 @pytest.mark.parametrize(

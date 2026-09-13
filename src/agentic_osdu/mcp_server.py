@@ -12,6 +12,7 @@ from mcp.server.mcpserver.tools import Tool
 from mcp_types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import TypeAdapter, ValidationError
 
+from agentic_osdu.agents.workflows import WorkflowId, build_workflow_plan
 from agentic_osdu.api.app import ErrorEnvelope, _category_for_code
 from agentic_osdu.domain.models import ToolError, ToolErrorCategory
 from agentic_osdu.runtime import create_runtime
@@ -27,6 +28,12 @@ from agentic_osdu.tools.contracts import (
 
 _SERVER_NAME = "agentic-osdu-data-preparation"
 _SERVER_VERSION = "1.0.0"
+_APPROVAL_GATED_WORKFLOW_STEPS = tuple(
+    (workflow_id, step)
+    for workflow_id in WorkflowId
+    for step in build_workflow_plan(workflow_id).steps
+    if step.requires_approval
+)
 
 
 class RegisteredToolInvoker(Protocol):
@@ -82,28 +89,20 @@ def _reject_unapproved_direct_action(tool_id: str, request: ToolRequest[Any]) ->
             "NETWORK_NOT_APPROVED",
             "Remote schema refresh requires a trusted network approval.",
         )
-    if tool_id == "TOOL-024":
+    for workflow_id, step in _APPROVAL_GATED_WORKFLOW_STEPS:
+        if step.tool_id != tool_id:
+            continue
+        if step.input_predicate is not None:
+            continue
+        if hasattr(request.input, "workflow_id"):
+            request_workflow_id = request.input.workflow_id
+            if request_workflow_id != workflow_id.value:
+                continue
         from agentic_osdu.agents.orchestrator import OrchestrationError
 
         raise OrchestrationError(
             "HUMAN_APPROVAL_REQUIRED",
-            "Learning-model mutations must execute through the signed WF-003 approval boundary.",
-        )
-    if tool_id == "TOOL-025" and (
-        request.input.generation is not None and not request.input.generation.dry_run
-    ):
-        from agentic_osdu.agents.orchestrator import OrchestrationError
-
-        raise OrchestrationError(
-            "HUMAN_APPROVAL_REQUIRED",
-            "Write-mode generation jobs require a signed human approval.",
-        )
-    if tool_id == "TOOL-029":
-        from agentic_osdu.agents.orchestrator import OrchestrationError
-
-        raise OrchestrationError(
-            "HUMAN_APPROVAL_REQUIRED",
-            "Human review decisions cannot be asserted by an MCP client.",
+            "This operation must execute through its signed human approval boundary.",
         )
 
 
