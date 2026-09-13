@@ -34,6 +34,7 @@ from agentic_osdu.tools.contracts import (
 
 _MALFORMED_PATH_SENTINEL = r"C:\TOP-SECRET\credentials.json"
 _MALFORMED_CREDENTIAL_SENTINEL = "SECRET_TOKEN_EPIC_012"
+_EXPORT_SENTINEL = "SECRET_EXPORT_EPIC_012"
 
 
 class RecordingInvoker:
@@ -89,6 +90,23 @@ def _workspace_request() -> dict[str, object]:
             "root_path": r"C:\Approved",
             "read_only": True,
             "allowed_output_subpaths": ["generated"],
+        },
+    }
+
+
+def _export_request() -> dict[str, object]:
+    return {
+        "request_id": str(uuid4()),
+        "workspace_id": str(uuid4()),
+        "actor": {"actor_id": "human.operator"},
+        "input": {
+            "request": {
+                "export_kind": "approved_manifest",
+                "target_id": str(uuid4()),
+                "output_root_id": "generated",
+                "relative_path": f"exports/{_EXPORT_SENTINEL}.json",
+                "expected_target_version": _EXPORT_SENTINEL,
+            }
         },
     }
 
@@ -235,12 +253,32 @@ def test_streamable_http_supports_initialize_list_and_call(
             "HUMAN_APPROVAL_REQUIRED"
         )
 
-        malformed = client.post(
+        denied_export = client.post(
             "/mcp/",
             headers=session_headers,
             json=_rpc(
                 "tools/call",
                 request_id=5,
+                params={
+                    "name": mcp_tool_name(TOOL_REGISTRY["TOOL-030"]),
+                    "arguments": _export_request(),
+                },
+            ),
+        )
+        assert denied_export.status_code == 200
+        denied_export_result = denied_export.json()["result"]
+        assert denied_export_result["isError"] is True
+        assert denied_export_result["structuredContent"]["errors"][0]["code"] == (
+            "HUMAN_APPROVAL_REQUIRED"
+        )
+        assert _EXPORT_SENTINEL not in json.dumps(denied_export_result)
+
+        malformed = client.post(
+            "/mcp/",
+            headers=session_headers,
+            json=_rpc(
+                "tools/call",
+                request_id=6,
                 params={
                     "name": mcp_tool_name(TOOL_REGISTRY["TOOL-001"]),
                     "arguments": {
@@ -260,6 +298,7 @@ def test_streamable_http_supports_initialize_list_and_call(
         for sentinel in (_MALFORMED_PATH_SENTINEL, _MALFORMED_CREDENTIAL_SENTINEL):
             assert sentinel not in serialized
             assert sentinel not in caplog.text
+        assert _EXPORT_SENTINEL not in caplog.text
         assert [tool_id for tool_id, _request in invoker.calls] == ["TOOL-001"]
 
 
@@ -331,10 +370,37 @@ def test_stdio_entrypoint_starts_and_speaks_mcp_protocol(tmp_path: Path) -> None
         serialized = json.dumps(malformed_result)
         for sentinel in (_MALFORMED_PATH_SENTINEL, _MALFORMED_CREDENTIAL_SENTINEL):
             assert sentinel not in serialized
+
+        process.stdin.write(
+            json.dumps(
+                _rpc(
+                    "tools/call",
+                    request_id=4,
+                    params={
+                        "name": mcp_tool_name(TOOL_REGISTRY["TOOL-030"]),
+                        "arguments": _export_request(),
+                    },
+                )
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+        denied_export = json.loads(process.stdout.readline())
+        assert denied_export["id"] == 4
+        denied_export_result = denied_export["result"]
+        assert denied_export_result["isError"] is True
+        assert denied_export_result["structuredContent"]["errors"][0]["code"] == (
+            "HUMAN_APPROVAL_REQUIRED"
+        )
+        assert _EXPORT_SENTINEL not in json.dumps(denied_export_result)
     finally:
         process.terminate()
         _stdout, stderr = process.communicate(timeout=10)
-        for sentinel in (_MALFORMED_PATH_SENTINEL, _MALFORMED_CREDENTIAL_SENTINEL):
+        for sentinel in (
+            _MALFORMED_PATH_SENTINEL,
+            _MALFORMED_CREDENTIAL_SENTINEL,
+            _EXPORT_SENTINEL,
+        ):
             assert sentinel not in stderr
 
 
