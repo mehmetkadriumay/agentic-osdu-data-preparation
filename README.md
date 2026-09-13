@@ -81,8 +81,9 @@ npm run build
 npm run test:e2e
 ```
 
-See [operations](docs/operations.md), [release policy](docs/release-policy.md),
-and the [approved parity report](docs/parity-report.json).
+See the [MCP workflow guide](docs/mcp-workflow-guide.md),
+[operations](docs/operations.md), [release policy](docs/release-policy.md), and
+the [approved parity report](docs/parity-report.json).
 
 ## Scope
 
