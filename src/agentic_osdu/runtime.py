@@ -43,7 +43,7 @@ from agentic_osdu.policy import (
     WorkspaceAccessPolicy,
 )
 from agentic_osdu.schemas import SchemaCatalogStore, SchemaValidationService
-from agentic_osdu.schemas.catalog import SchemaCatalogError
+from agentic_osdu.schemas.catalog import LocalSchemaReadCapability, SchemaCatalogError
 from agentic_osdu.state.database import StateDatabase, create_sqlite_state
 from agentic_osdu.state.models import Base
 from agentic_osdu.state.repositories import StateRepository
@@ -99,6 +99,7 @@ from agentic_osdu.tools.discovery import (
     DiscoveryError,
     DiscoveryService,
     InMemoryWorkspacePolicyStore,
+    workspace_policy_fingerprint,
 )
 from agentic_osdu.tools.review import ReviewService
 
@@ -501,6 +502,11 @@ class RuntimeComposition:
                 "NETWORK_NOT_APPROVED",
                 "Remote schema refresh requires a trusted network approval.",
             )
+        descriptor = self.workspace_store.get(request.workspace_id)
+        if descriptor is None or descriptor.workspace_id != request.workspace_id:
+            raise OrchestrationError(
+                "ROOT_POLICY_DENIED", "The workspace has no approved runtime policy."
+            )
         policy = self._workspace_policy(request.workspace_id)
         try:
             relative_root = os.path.relpath(source.local_root.root, policy.source_root)
@@ -517,9 +523,35 @@ class RuntimeComposition:
         source = source.model_copy(
             update={"local_root": ApprovedAbsolutePath(approved_root)},
         )
+        workspace_capability = LocalSchemaReadCapability.capture(
+            Path(policy.source_root),
+            error_code="ROOT_POLICY_DENIED",
+        )
+        try:
+            approved_fingerprint = workspace_policy_fingerprint(
+                canonical_root=policy.source_root,
+                read_only=descriptor.read_only,
+                allowed_output_subpaths=[path.root for path in descriptor.allowed_output_subpaths],
+                filesystem_identity=workspace_capability.identity_tuple,
+                path_style=PathStyle.WINDOWS if os.name == "nt" else PathStyle.POSIX,
+            )
+            if approved_fingerprint != descriptor.policy_fingerprint:
+                raise OrchestrationError(
+                    "ROOT_POLICY_DENIED",
+                    "The approved workspace root identity has changed.",
+                )
+            capability = LocalSchemaReadCapability.capture(
+                Path(approved_root),
+                error_code="ROOT_POLICY_DENIED",
+                anchor=workspace_capability,
+            )
+        except Exception:
+            workspace_capability.close()
+            raise
         catalog = self.schema_catalog_store.import_local(
             source,
             cancellation=self._current_cancellation(),
+            capability=capability,
         )
         return _result(
             "TOOL-021",

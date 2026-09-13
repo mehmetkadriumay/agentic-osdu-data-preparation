@@ -6,8 +6,12 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+import stat
+import threading
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from errno import ELOOP
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
@@ -41,10 +45,40 @@ _REVISION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$")
 _CATALOG_NAMESPACE = UUID("5071ad4a-9de4-4ba9-ae36-4f2b4e17d67b")
 _CATALOG_MANIFEST = "catalog.json"
 _ACTIVE_MANIFEST = "active.json"
+_LOCK_FILE = ".catalog.lock"
 _MAX_SCHEMA_BYTES = 16 * 1024 * 1024
+_CATALOG_THREAD_LOCK = threading.RLock()
 
 Downloader = Callable[[str], bytes]
 CancellationCheck = Callable[[], bool]
+
+
+@contextmanager
+def _catalog_write_lock(root: Path) -> Iterator[None]:
+    root.mkdir(parents=True, exist_ok=True)
+    with _CATALOG_THREAD_LOCK, (root / _LOCK_FILE).open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
 
 
 class SchemaCatalogError(RuntimeError):
@@ -61,6 +95,447 @@ class KindParts:
     source: str
     entity: str
     version: str
+
+
+@dataclass(frozen=True, slots=True)
+class _FilesystemIdentity:
+    device: int
+    inode: int
+    file_type: int
+
+
+@dataclass(slots=True)
+class LocalSchemaReadCapability:
+    """Filesystem-identity-bound read capability for one approved catalog root."""
+
+    root: Path
+    identity: _FilesystemIdentity
+    physical_root: Path
+    _observed_directories: dict[Path, tuple[_FilesystemIdentity, Path]] = field(
+        default_factory=dict
+    )
+    _observed_files: dict[Path, _FilesystemIdentity] = field(default_factory=dict)
+    _descriptors: list[int] = field(default_factory=list)
+    _anchor: LocalSchemaReadCapability | None = None
+
+    @property
+    def identity_tuple(self) -> tuple[int, int, int]:
+        return (self.identity.device, self.identity.inode, self.identity.file_type)
+
+    @classmethod
+    def capture(
+        cls,
+        root: Path,
+        *,
+        error_code: str = "CATALOG_INCOMPLETE",
+        anchor: LocalSchemaReadCapability | None = None,
+    ) -> LocalSchemaReadCapability:
+        canonical = Path(os.path.abspath(root))
+        if anchor is None:
+            traversal_root = Path(canonical.anchor)
+            descriptor, _, physical_traversal_root = _open_bound_descriptor(
+                traversal_root,
+                require_directory=True,
+                error_code=error_code,
+            )
+            descriptors = [descriptor]
+            observed_locations: dict[Path, tuple[_FilesystemIdentity, Path]] = {}
+            current = traversal_root
+            expected_physical = physical_traversal_root
+            try:
+                for part in canonical.relative_to(traversal_root).parts:
+                    current /= part
+                    expected_physical /= part
+                    descriptor, identity, physical_path = _open_bound_descriptor(
+                        current,
+                        require_directory=True,
+                        error_code=error_code,
+                    )
+                    descriptors.append(descriptor)
+                    if _normalize_physical_path(str(physical_path)) != _normalize_physical_path(
+                        str(expected_physical)
+                    ):
+                        raise SchemaCatalogError(
+                            "ROOT_POLICY_DENIED",
+                            "The local schema path traversed a link or reparse point.",
+                        )
+                    observed_locations[current] = (identity, physical_path)
+                if observed_locations:
+                    identity = observed_locations[canonical][0]
+                else:
+                    identity = _identity_from_metadata(os.fstat(descriptors[0]))
+                capability = cls(
+                    root=canonical,
+                    identity=identity,
+                    physical_root=_normalize_physical_path(str(expected_physical)),
+                    _observed_directories=observed_locations,
+                    _descriptors=descriptors,
+                )
+                capability.validate()
+                return capability
+            except Exception:
+                for descriptor in descriptors:
+                    os.close(descriptor)
+                raise
+        else:
+            anchor.validate()
+            try:
+                relative = canonical.relative_to(anchor.root)
+            except ValueError as error:
+                raise SchemaCatalogError(
+                    "ROOT_POLICY_DENIED",
+                    "The local schema path is outside the approved workspace root.",
+                ) from error
+            current = anchor.root
+            expected_physical = anchor.physical_root
+            observed_locations = {}
+            descriptors = []
+            try:
+                for part in relative.parts:
+                    current /= part
+                    expected_physical /= part
+                    descriptor, identity, physical_path = _open_bound_descriptor(
+                        current,
+                        require_directory=True,
+                        error_code=error_code,
+                    )
+                    descriptors.append(descriptor)
+                    if _normalize_physical_path(str(physical_path)) != _normalize_physical_path(
+                        str(expected_physical)
+                    ):
+                        raise SchemaCatalogError(
+                            "ROOT_POLICY_DENIED",
+                            "The local schema path traversed a link or reparse point.",
+                        )
+                    observed_locations[current] = (identity, physical_path)
+                    anchor.validate()
+                if not descriptors:
+                    descriptor, identity, physical_root = _open_bound_descriptor(
+                        canonical,
+                        require_directory=True,
+                        error_code=error_code,
+                    )
+                    descriptors.append(descriptor)
+                else:
+                    identity = observed_locations[canonical][0]
+                    physical_root = _normalize_physical_path(str(expected_physical))
+                capability = cls(
+                    root=canonical,
+                    identity=identity,
+                    physical_root=physical_root,
+                    _observed_directories=observed_locations,
+                    _descriptors=descriptors,
+                    _anchor=anchor,
+                )
+                capability.validate()
+                return capability
+            except Exception:
+                for descriptor in descriptors:
+                    os.close(descriptor)
+                raise
+
+    def validate(self) -> None:
+        if self._anchor is not None:
+            self._anchor.validate()
+        _require_same_identity_and_location(
+            self.root,
+            self.identity,
+            self.physical_root,
+            require_directory=True,
+        )
+        for path, (identity, physical_path) in self._observed_directories.items():
+            _require_same_identity_and_exact_location(
+                path,
+                identity,
+                physical_path,
+                require_directory=True,
+            )
+        for path, identity in self._observed_files.items():
+            _require_same_identity_and_location(
+                path,
+                identity,
+                self.physical_root,
+                require_file=True,
+            )
+
+    def observe_directory(self, path: Path) -> None:
+        descriptor, identity, physical_path = _open_bound_descriptor(
+            path,
+            require_directory=True,
+            error_code="CATALOG_INCOMPLETE",
+        )
+        try:
+            _require_physical_containment(self.physical_root, physical_path)
+            previous = self._observed_directories.setdefault(path, (identity, physical_path))
+            if previous[0] != identity or previous[1] != physical_path:
+                raise SchemaCatalogError(
+                    "ROOT_POLICY_DENIED",
+                    "The approved local schema path changed during import.",
+                )
+            if previous[0] == identity and not any(
+                _identity_from_metadata(os.fstat(item)) == identity for item in self._descriptors
+            ):
+                self._descriptors.append(descriptor)
+                descriptor = -1
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    def observe_file(
+        self,
+        path: Path,
+        identity: _FilesystemIdentity,
+        descriptor: int,
+    ) -> None:
+        previous = self._observed_files.setdefault(path, identity)
+        if previous != identity:
+            raise SchemaCatalogError(
+                "ROOT_POLICY_DENIED",
+                "The approved local schema file changed during import.",
+            )
+        if previous == identity and not any(
+            _identity_from_metadata(os.fstat(item)) == identity for item in self._descriptors
+        ):
+            self._descriptors.append(os.dup(descriptor))
+
+    def close(self) -> None:
+        for descriptor in reversed(self._descriptors):
+            os.close(descriptor)
+        self._descriptors.clear()
+        if self._anchor is not None:
+            self._anchor.close()
+            self._anchor = None
+
+
+def _identity_from_metadata(metadata: os.stat_result) -> _FilesystemIdentity:
+    return _FilesystemIdentity(
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        file_type=stat.S_IFMT(metadata.st_mode),
+    )
+
+
+def _is_link_or_reparse(metadata: os.stat_result) -> bool:
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _normalize_physical_path(path: str) -> Path:
+    if path.startswith("\\\\?\\UNC\\"):
+        path = f"\\\\{path[8:]}"
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
+    return Path(os.path.normcase(os.path.normpath(path)))
+
+
+def _physical_path_from_descriptor(descriptor: int, fallback: Path) -> Path:
+    if os.name == "nt":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        get_final_path = ctypes.windll.kernel32.GetFinalPathNameByHandleW
+        get_final_path.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        get_final_path.restype = wintypes.DWORD
+        handle = msvcrt.get_osfhandle(descriptor)
+        size = get_final_path(handle, None, 0, 0)
+        if size == 0:
+            raise OSError("path handle resolution failed")
+        buffer = ctypes.create_unicode_buffer(size + 1)
+        if get_final_path(handle, buffer, len(buffer), 0) == 0:
+            raise OSError("path handle resolution failed")
+        return _normalize_physical_path(buffer.value)
+    for prefix in ("/proc/self/fd", "/dev/fd"):
+        link = Path(prefix) / str(descriptor)
+        try:
+            return _normalize_physical_path(os.readlink(link))
+        except OSError:
+            continue
+    return _normalize_physical_path(str(fallback.resolve(strict=True)))
+
+
+def _open_windows_descriptor(path: Path, *, require_directory: bool) -> int:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    create_file = ctypes.windll.kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    access = 0x80 if require_directory else 0x80000000
+    flags = 0x00200000 | (0x02000000 if require_directory else 0)
+    handle = create_file(str(path), access, 0x3, None, 3, flags, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise OSError(ctypes.get_last_error(), "path handle open failed")
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    except Exception:
+        ctypes.windll.kernel32.CloseHandle(handle)
+        raise
+
+
+def _open_bound_descriptor(
+    path: Path,
+    *,
+    require_directory: bool = False,
+    require_file: bool = False,
+    error_code: str = "ROOT_POLICY_DENIED",
+) -> tuple[int, _FilesystemIdentity, Path]:
+    descriptor = -1
+    try:
+        if os.name == "nt":
+            descriptor = _open_windows_descriptor(path, require_directory=require_directory)
+        else:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            if require_directory:
+                flags |= getattr(os, "O_DIRECTORY", 0)
+            descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+        physical_path = _physical_path_from_descriptor(descriptor, path)
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        denied = error.errno == ELOOP or getattr(error, "winerror", None) in {
+            681,
+            1920,
+            4392,
+            4393,
+            4394,
+        }
+        raise SchemaCatalogError(
+            "ROOT_POLICY_DENIED" if denied else error_code,
+            "The approved local schema path is unavailable.",
+        ) from error
+    if _is_link_or_reparse(metadata):
+        os.close(descriptor)
+        raise SchemaCatalogError(
+            "ROOT_POLICY_DENIED",
+            "Links and reparse points are not allowed in local schema paths.",
+        )
+    if require_directory and not stat.S_ISDIR(metadata.st_mode):
+        os.close(descriptor)
+        raise SchemaCatalogError(error_code, "A required local schema directory is unavailable.")
+    if require_file and not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        raise SchemaCatalogError(error_code, "A required local schema file is unavailable.")
+    return descriptor, _identity_from_metadata(metadata), physical_path
+
+
+def _require_physical_containment(root: Path, candidate: Path) -> None:
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise SchemaCatalogError(
+            "ROOT_POLICY_DENIED",
+            "The approved local schema path resolved outside its physical root.",
+        ) from error
+
+
+def _require_same_identity_and_location(
+    path: Path,
+    expected: _FilesystemIdentity,
+    physical_root: Path,
+    *,
+    require_directory: bool = False,
+    require_file: bool = False,
+) -> None:
+    descriptor, current, physical_path = _open_bound_descriptor(
+        path,
+        require_directory=require_directory,
+        require_file=require_file,
+    )
+    os.close(descriptor)
+    _require_physical_containment(physical_root, physical_path)
+    if current != expected:
+        raise SchemaCatalogError(
+            "ROOT_POLICY_DENIED",
+            "The approved local schema path changed during import.",
+        )
+
+
+def _require_same_identity_and_exact_location(
+    path: Path,
+    expected: _FilesystemIdentity,
+    expected_physical_path: Path,
+    *,
+    require_directory: bool = False,
+) -> None:
+    descriptor, current, physical_path = _open_bound_descriptor(
+        path,
+        require_directory=require_directory,
+    )
+    os.close(descriptor)
+    if current != expected or _normalize_physical_path(
+        str(physical_path)
+    ) != _normalize_physical_path(str(expected_physical_path)):
+        raise SchemaCatalogError(
+            "ROOT_POLICY_DENIED",
+            "The approved local schema path changed during import.",
+        )
+
+
+def _read_bound_file(
+    capability: LocalSchemaReadCapability,
+    relative_path: str,
+) -> bytes:
+    capability.validate()
+    parts = relative_path.split("/")
+    current = capability.root
+    for part in parts[:-1]:
+        current /= part
+        capability.observe_directory(current)
+    candidate = current / parts[-1]
+    descriptor, file_identity, physical_path = _open_bound_descriptor(
+        candidate,
+        require_file=True,
+        error_code="CATALOG_INCOMPLETE",
+    )
+    try:
+        _require_physical_containment(capability.physical_root, physical_path)
+        capability.observe_file(candidate, file_identity, descriptor)
+        capability.validate()
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            capability.validate()
+            if _identity_from_metadata(os.fstat(descriptor)) != file_identity:
+                raise SchemaCatalogError(
+                    "ROOT_POLICY_DENIED",
+                    "A schema file changed while it was being read.",
+                )
+            chunk = os.read(descriptor, min(1024 * 1024, _MAX_SCHEMA_BYTES + 1 - size))
+            capability.validate()
+            if _identity_from_metadata(os.fstat(descriptor)) != file_identity:
+                raise SchemaCatalogError(
+                    "ROOT_POLICY_DENIED",
+                    "A schema file changed while it was being read.",
+                )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > _MAX_SCHEMA_BYTES:
+                raise SchemaCatalogError(
+                    "CATALOG_INCOMPLETE",
+                    "A local schema exceeds the configured bound.",
+                )
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def parse_kind(kind: str) -> KindParts:
@@ -206,47 +681,32 @@ class SchemaCatalogStore:
         request: LocalSchemaCatalogImport,
         *,
         cancellation: CancellationCheck | None = None,
+        capability: LocalSchemaReadCapability | None = None,
     ) -> SchemaCatalogRef:
-        _check_cancelled(cancellation)
-        source_root = Path(request.local_root.root)
-        if source_root.is_symlink() or not source_root.is_dir():
-            raise SchemaCatalogError(
-                "CATALOG_INCOMPLETE", "The approved local schema export is unavailable."
-            )
-
-        def read(checksum: SchemaChecksum) -> bytes:
-            candidate = source_root.joinpath(*checksum.relative_path.root.split("/"))
-            try:
-                resolved = candidate.resolve(strict=True)
-                resolved.relative_to(source_root.resolve(strict=True))
-            except (OSError, ValueError) as error:
+        source_root = Path(os.path.abspath(request.local_root.root))
+        access = capability or LocalSchemaReadCapability.capture(source_root)
+        try:
+            _check_cancelled(cancellation)
+            if os.path.normcase(str(access.root)) != os.path.normcase(str(source_root)):
                 raise SchemaCatalogError(
-                    "CATALOG_INCOMPLETE", "A schema file is outside the approved local export."
-                ) from error
-            relative_parts = candidate.relative_to(source_root).parts
-            inspected = [source_root]
-            current = source_root
-            for part in relative_parts:
-                current /= part
-                inspected.append(current)
-            if any(path.is_symlink() for path in inspected):
-                raise SchemaCatalogError(
-                    "CATALOG_INCOMPLETE", "Schema catalog links are not imported."
+                    "ROOT_POLICY_DENIED",
+                    "The local schema capability does not match the approved root.",
                 )
-            try:
-                return resolved.read_bytes()
-            except OSError as error:
-                raise SchemaCatalogError(
-                    "CATALOG_INCOMPLETE", "A required schema file could not be read."
-                ) from error
+            access.validate()
 
-        return self._install(
-            revision=request.revision,
-            source=f"local_export:{source_root}",
-            expected=request.expected_checksums,
-            reader=read,
-            cancellation=cancellation,
-        )
+            def read(checksum: SchemaChecksum) -> bytes:
+                return _read_bound_file(access, checksum.relative_path.root)
+
+            return self._install(
+                revision=request.revision,
+                source=f"local_export:{source_root}",
+                expected=request.expected_checksums,
+                reader=read,
+                cancellation=cancellation,
+                before_publish=access.validate,
+            )
+        finally:
+            access.close()
 
     def refresh_remote(
         self,
@@ -314,6 +774,27 @@ class SchemaCatalogStore:
         expected: tuple[SchemaChecksum, ...],
         reader: Callable[[SchemaChecksum], bytes],
         cancellation: CancellationCheck | None,
+        before_publish: Callable[[], None] | None = None,
+    ) -> SchemaCatalogRef:
+        with _catalog_write_lock(self._root):
+            return self._install_locked(
+                revision=revision,
+                source=source,
+                expected=expected,
+                reader=reader,
+                cancellation=cancellation,
+                before_publish=before_publish,
+            )
+
+    def _install_locked(
+        self,
+        *,
+        revision: str,
+        source: str,
+        expected: tuple[SchemaChecksum, ...],
+        reader: Callable[[SchemaChecksum], bytes],
+        cancellation: CancellationCheck | None,
+        before_publish: Callable[[], None] | None,
     ) -> SchemaCatalogRef:
         if not _REVISION_PATTERN.fullmatch(revision):
             raise SchemaCatalogError("CATALOG_INCOMPLETE", "The catalog revision is invalid.")
@@ -324,19 +805,50 @@ class SchemaCatalogStore:
         catalog_sha256 = _catalog_digest(revision, source, checksum_rows)
         catalog_id = uuid5(_CATALOG_NAMESPACE, catalog_sha256)
         destination = self._catalog_directory(revision, catalog_sha256)
+        previous_active_id = self._active_id()
+
+        def verify_source() -> None:
+            for checksum in expected:
+                _check_cancelled(cancellation)
+                payload = reader(checksum)
+                if sha256(payload).hexdigest() != checksum.sha256:
+                    raise SchemaCatalogError(
+                        "CHECKSUM_MISMATCH", "A schema does not match its expected checksum."
+                    )
+                _validate_wrapper(payload)
+
+        def restore_active() -> None:
+            if previous_active_id is None:
+                (self._root / _ACTIVE_MANIFEST).unlink(missing_ok=True)
+            else:
+                self._activate_unlocked(previous_active_id)
+
         if destination.exists():
             descriptor = self.open(catalog_id).descriptor
-            _check_cancelled(cancellation)
-            self.activate(catalog_id)
-            return descriptor.model_copy(
-                update={"active": True, "activated_at": self.active_catalog().activated_at}
-            )
+            activated = False
+            try:
+                verify_source()
+                if before_publish is not None:
+                    before_publish()
+                self._activate_unlocked(catalog_id)
+                activated = True
+                if before_publish is not None:
+                    before_publish()
+                return descriptor.model_copy(
+                    update={"active": True, "activated_at": self.active_catalog().activated_at}
+                )
+            except Exception:
+                if activated:
+                    restore_active()
+                raise
 
         self._root.mkdir(parents=True, exist_ok=True)
         temporary = self._root / f".{catalog_id}.{uuid4().hex}.tmp"
         if temporary.exists():
             shutil.rmtree(temporary)
         temporary.mkdir()
+        published = False
+        activated = False
         try:
             for checksum in expected:
                 _check_cancelled(cancellation)
@@ -362,16 +874,28 @@ class SchemaCatalogStore:
                 json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
                 encoding="utf-8",
             )
+            if before_publish is not None:
+                before_publish()
             try:
                 temporary.rename(destination)
+                published = True
             except FileExistsError:
                 shutil.rmtree(temporary)
+            _check_cancelled(cancellation)
+            if before_publish is not None:
+                before_publish()
+            self._activate_unlocked(catalog_id)
+            activated = True
+            if before_publish is not None:
+                before_publish()
+            return self.active_catalog()
         except Exception:
             shutil.rmtree(temporary, ignore_errors=True)
+            if activated:
+                restore_active()
+            if published:
+                shutil.rmtree(destination, ignore_errors=True)
             raise
-        _check_cancelled(cancellation)
-        self.activate(catalog_id)
-        return self.active_catalog()
 
     def open(self, catalog_id: UUID) -> LoadedSchemaCatalog:
         for manifest_path in self._root.glob(f"*/{_CATALOG_MANIFEST}"):
@@ -418,6 +942,10 @@ class SchemaCatalogStore:
         )
 
     def activate(self, catalog_id: UUID) -> SchemaCatalogRef:
+        with _catalog_write_lock(self._root):
+            return self._activate_unlocked(catalog_id)
+
+    def _activate_unlocked(self, catalog_id: UUID) -> SchemaCatalogRef:
         loaded = self.open(catalog_id)
         from datetime import UTC, datetime
 

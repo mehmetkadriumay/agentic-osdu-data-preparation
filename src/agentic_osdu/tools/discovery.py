@@ -6,6 +6,7 @@ import base64
 import fnmatch
 import json
 import os
+import stat
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -36,6 +37,34 @@ from agentic_osdu.tools.contracts import (
 )
 
 DISCOVERY_VERSION = 1
+
+
+def workspace_policy_fingerprint(
+    *,
+    canonical_root: str,
+    read_only: bool,
+    allowed_output_subpaths: list[str],
+    filesystem_identity: tuple[int, int, int],
+    path_style: PathStyle,
+) -> str:
+    """Bind a workspace policy to the approved root's filesystem identity."""
+
+    policy_document = {
+        "allowed_output_subpaths": sorted(allowed_output_subpaths),
+        "canonical_root": (
+            canonical_root.casefold() if path_style is PathStyle.WINDOWS else canonical_root
+        ),
+        "filesystem_identity": {
+            "device": filesystem_identity[0],
+            "file_type": filesystem_identity[2],
+            "inode": filesystem_identity[1],
+        },
+        "read_only": read_only,
+        "version": "2.0.0",
+    }
+    return sha256(
+        json.dumps(policy_document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 class DiscoveryError(RuntimeError):
@@ -169,17 +198,23 @@ class DiscoveryService:
             ) from error
 
         outputs = sorted(path.root for path in request.allowed_output_subpaths)
-        policy_document = {
-            "allowed_output_subpaths": outputs,
-            "canonical_root": (
-                canonical.casefold() if self._path_policy.style is PathStyle.WINDOWS else canonical
+        try:
+            metadata = os.stat(canonical, follow_symlinks=False)
+        except OSError as error:
+            raise DiscoveryError(
+                "ROOT_POLICY_DENIED", "The workspace root could not be approved safely."
+            ) from error
+        fingerprint = workspace_policy_fingerprint(
+            canonical_root=canonical,
+            read_only=request.read_only,
+            allowed_output_subpaths=outputs,
+            filesystem_identity=(
+                metadata.st_dev,
+                metadata.st_ino,
+                stat.S_IFMT(metadata.st_mode),
             ),
-            "read_only": request.read_only,
-            "version": "1.0.0",
-        }
-        fingerprint = sha256(
-            json.dumps(policy_document, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+            path_style=self._path_policy.style,
+        )
         descriptor = WorkspaceDescriptor(
             workspace_id=uuid5(NAMESPACE_URL, f"workspace-policy:{fingerprint}"),
             canonical_root=canonical,
