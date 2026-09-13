@@ -142,27 +142,33 @@ def _handler(
 
     invoke.__name__ = mcp_tool_name(definition)
     invoke.__doc__ = definition.purpose
+    # Keep SDK argument parsing permissive; the published schema below remains exact,
+    # while ToolRequest validation and redaction stay inside invoke().
     invoke.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
         parameters=(
             inspect.Parameter(
                 "request_id",
                 inspect.Parameter.KEYWORD_ONLY,
                 annotation=Any,
+                default=None,
             ),
             inspect.Parameter(
                 "workspace_id",
                 inspect.Parameter.KEYWORD_ONLY,
                 annotation=Any,
+                default=None,
             ),
             inspect.Parameter(
                 "actor",
                 inspect.Parameter.KEYWORD_ONLY,
                 annotation=Any,
+                default=None,
             ),
             inspect.Parameter(
                 "input",
                 inspect.Parameter.KEYWORD_ONLY,
                 annotation=Any,
+                default=None,
             ),
             inspect.Parameter(
                 "cancellation_token_id",

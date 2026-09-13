@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from agentic_osdu.api.app import create_app
@@ -29,6 +31,9 @@ from agentic_osdu.tools.contracts import (
     ToolResultStatus,
     WorkspaceDescriptor,
 )
+
+_MALFORMED_PATH_SENTINEL = r"C:\TOP-SECRET\credentials.json"
+_MALFORMED_CREDENTIAL_SENTINEL = "SECRET_TOKEN_EPIC_012"
 
 
 class RecordingInvoker:
@@ -147,7 +152,10 @@ def test_production_runtime_exposes_every_registered_tool(
         runtime.database.dispose()
 
 
-def test_streamable_http_supports_initialize_list_and_call() -> None:
+def test_streamable_http_supports_initialize_list_and_call(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
     invoker = RecordingInvoker()
     server = create_mcp_server(invoker)
     app = create_app(invoker, mcp_server=server)
@@ -226,6 +234,32 @@ def test_streamable_http_supports_initialize_list_and_call() -> None:
         assert denied_result["structuredContent"]["errors"][0]["code"] == (
             "HUMAN_APPROVAL_REQUIRED"
         )
+
+        malformed = client.post(
+            "/mcp/",
+            headers=session_headers,
+            json=_rpc(
+                "tools/call",
+                request_id=5,
+                params={
+                    "name": mcp_tool_name(TOOL_REGISTRY["TOOL-001"]),
+                    "arguments": {
+                        "input": {
+                            "root_path": _MALFORMED_PATH_SENTINEL,
+                            "api_token": _MALFORMED_CREDENTIAL_SENTINEL,
+                        }
+                    },
+                },
+            ),
+        )
+        assert malformed.status_code == 200
+        malformed_result = malformed.json()["result"]
+        assert malformed_result["isError"] is True
+        assert malformed_result["structuredContent"]["errors"][0]["code"] == ("TOOL_INPUT_INVALID")
+        serialized = json.dumps(malformed_result)
+        for sentinel in (_MALFORMED_PATH_SENTINEL, _MALFORMED_CREDENTIAL_SENTINEL):
+            assert sentinel not in serialized
+            assert sentinel not in caplog.text
         assert [tool_id for tool_id, _request in invoker.calls] == ["TOOL-001"]
 
 
@@ -269,9 +303,39 @@ def test_stdio_entrypoint_starts_and_speaks_mcp_protocol(tmp_path: Path) -> None
         listed = json.loads(process.stdout.readline())
         assert listed["id"] == 2
         assert len(listed["result"]["tools"]) == 30
+
+        process.stdin.write(
+            json.dumps(
+                _rpc(
+                    "tools/call",
+                    request_id=3,
+                    params={
+                        "name": mcp_tool_name(TOOL_REGISTRY["TOOL-001"]),
+                        "arguments": {
+                            "input": {
+                                "root_path": _MALFORMED_PATH_SENTINEL,
+                                "api_token": _MALFORMED_CREDENTIAL_SENTINEL,
+                            }
+                        },
+                    },
+                )
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+        malformed = json.loads(process.stdout.readline())
+        assert malformed["id"] == 3
+        malformed_result = malformed["result"]
+        assert malformed_result["isError"] is True
+        assert malformed_result["structuredContent"]["errors"][0]["code"] == ("TOOL_INPUT_INVALID")
+        serialized = json.dumps(malformed_result)
+        for sentinel in (_MALFORMED_PATH_SENTINEL, _MALFORMED_CREDENTIAL_SENTINEL):
+            assert sentinel not in serialized
     finally:
         process.terminate()
-        process.wait(timeout=10)
+        _stdout, stderr = process.communicate(timeout=10)
+        for sentinel in (_MALFORMED_PATH_SENTINEL, _MALFORMED_CREDENTIAL_SENTINEL):
+            assert sentinel not in stderr
 
 
 def test_packaging_and_repository_copilot_configuration_publish_the_stdio_server() -> None:
