@@ -80,8 +80,45 @@ environment so the MCP executable is available:
 uv run --frozen copilot
 ```
 
+### Run the complete example with PowerShell
+
+GitHub Copilot CLI must already be installed and signed in. Run these commands
+from the repository root; the source workspace and its `Data` directory must
+already exist. The launcher does not create or populate a source directory.
+
+```powershell
+# Install the project's locked dependencies, including the MCP executable.
+uv sync --frozen --python 3.12
+
+# Check the server configured by this repository's .github\mcp.json.
+uv run --frozen copilot mcp get agentic-osdu-data-preparation
+
+# Preview the exact seven-step prompt without starting Copilot or any tools.
+.\scripts\explore_source.ps1 -WorkspaceRoot 'C:\OSDU\NewSurvey' -PrintPrompt
+
+# Launch Copilot interactively with that prompt and your workspace path.
+.\scripts\explore_source.ps1 -WorkspaceRoot 'C:\OSDU\NewSurvey'
+```
+
+For another source, change only `-WorkspaceRoot`, for example:
+
+```powershell
+.\scripts\explore_source.ps1 -WorkspaceRoot 'D:\Subsurface\Survey 2026'
+```
+
+[`explore_source.ps1`](scripts/explore_source.ps1) reads the prompt below from
+this README, substitutes the workspace and `Data` paths, and executes
+`uv run --frozen copilot --interactive <prompt>` from the repository root.
+It checks that the directories exist, but workspace authorization and filesystem
+policy remain the MCP server's responsibility. It does not auto-approve tools,
+parse files itself, or bypass approvals; review Copilot's permission requests.
+No HTTP service is required for this stdio MCP example.
+
+### The seven-step prompt
+
 Use `/mcp get agentic-osdu-data-preparation` to check the server configuration,
-then paste this prompt:
+then paste this prompt if you started Copilot manually. The launcher sends it
+automatically, so do not paste it again in the same run:
 
 ```text
 Use the agentic-osdu-data-preparation MCP server to explore and extract
@@ -204,6 +241,53 @@ and failures so the final report accounts for every discovered file.
 Do not modify source files, generate manifests, or ingest anything into OSDU.
 Ask before any operation requiring additional approval.
 ```
+
+### Tool arguments for individual steps
+
+The launcher executes the steps through Copilot and MCP, not separate shell
+commands. In particular, `extract_segy_metadata` is an MCP tool name, not an
+`agentic-osdu` CLI subcommand. Copilot discovers each request schema and wraps
+the tool-specific `input` with the request ID, workspace ID, and actor.
+
+For example, the `input` for step 2's bounded sample read is:
+
+```json
+{
+  "file_id": "<file_id returned by discover_workspace_files>",
+  "mode": "prefix",
+  "offset": 0,
+  "max_bytes": 65536
+}
+```
+
+For a detected SEG-Y file, step 3 can use this `extract_segy_metadata` input:
+
+```json
+{
+  "file_id": "<the same returned file_id>",
+  "options": {
+    "max_trace_samples": 32,
+    "inspect_textual_header": true
+  }
+}
+```
+
+After step 6 returns an inventory ID, step 7 can request its first review page:
+
+```json
+{
+  "inventory_id": "<inventory_id returned by persist_inventory>",
+  "query": {
+    "sort_by": "relative_path",
+    "limit": 100,
+    "offset": 0
+  }
+}
+```
+
+These are schema examples, not shell commands or complete request envelopes.
+Replace placeholders only with actual tool results. For later review pages,
+increase `offset` by `limit` until all `total_count` items are covered.
 
 For example, `seismic.sgy` should take the detection -> SEG-Y extraction ->
 classification path only if its content supports that choice. `well.las`
