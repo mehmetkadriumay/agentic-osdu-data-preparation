@@ -28,3 +28,6 @@ test-results/
 Thumbs.db
 
 .agentic-osdu-state/
+.azure/
+.foundry/
+*.local.json

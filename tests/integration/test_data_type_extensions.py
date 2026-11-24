@@ -26,12 +26,12 @@ from agentic_osdu.formats import CancellationCheck, ExtractionOutcome, FormatSou
 from agentic_osdu.runtime import create_runtime
 from agentic_osdu.tools.contracts import (
     BuildInventoryReviewInput,
-    ClassifyDataInput,
     DetectFormatInput,
     DiscoverFilesInput,
     JobControlAction,
     JobDefinition,
     JobStepDefinition,
+    PersistInventoryInput,
     QueryOrCancelJobInput,
     ReadFileSampleInput,
     RegisterWorkspaceInput,
@@ -199,11 +199,34 @@ def test_injected_handler_drives_detection_classification_and_extraction(
                 "TOOL-005",
                 _request(
                     workspace_id,
-                    ClassifyDataInput(file_id=file.file_id, detection=detected.detection),
+                    runtime.classification_input(file.file_id),
                 ),
             ).output
             assert result is not None
             classification = result.classification
+            assert classification.extraction_ids
+            inventory_id = uuid4()
+            snapshot = runtime.inventory_snapshot(inventory_id, (file.file_id,))
+            assert snapshot.extractions[0].extraction_id in classification.extraction_ids
+            assert snapshot.extracted_metadata[0].payload == extracted.output
+            assert snapshot.files[0].sha256 is not None
+            persisted = runtime.registry.invoke(
+                "TOOL-022",
+                _request(
+                    workspace_id,
+                    PersistInventoryInput(mutation=snapshot, expected_state_version=0),
+                ),
+            ).output
+            assert persisted is not None
+            assert persisted.state_version == 1
+            restored = runtime.repository.load_runtime_file_records(
+                inventory_id=inventory_id, file_ids=(file.file_id,)
+            )
+            assert restored[0][1].metadata_extractions == snapshot.extracted_metadata
+            assert (
+                runtime.repository.load_runtime_file_records(inventory_id=inventory_id, file_ids=())
+                == ()
+            )
         assert classification.category is DataCategory.INTERPRETATION
         assert classification.subtype is DataSubtype.HORIZON
         assert len(calls) == 1

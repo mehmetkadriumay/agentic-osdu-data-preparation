@@ -1026,10 +1026,20 @@ class StateRepository:
                 for row in rows
             )
 
-    def load_runtime_file_records(self) -> tuple[tuple[UUID, FileRecordContract], ...]:
+    def load_runtime_file_records(
+        self,
+        *,
+        inventory_id: UUID | None = None,
+        file_ids: tuple[UUID, ...] | None = None,
+    ) -> tuple[tuple[UUID, FileRecordContract], ...]:
         with self.session_factory() as session:
+            query = select(FileAssetEntity)
+            if inventory_id is not None:
+                query = query.where(FileAssetEntity.inventory_id == str(inventory_id))
+            if file_ids is not None:
+                query = query.where(FileAssetEntity.id.in_(tuple(str(item) for item in file_ids)))
             rows = session.scalars(
-                select(FileAssetEntity).order_by(FileAssetEntity.inventory_id, FileAssetEntity.id)
+                query.order_by(FileAssetEntity.inventory_id, FileAssetEntity.id)
             ).all()
             loaded: list[tuple[UUID, FileRecordContract]] = []
             for row in rows:

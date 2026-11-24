@@ -36,7 +36,7 @@ from agentic_osdu.policy import (
 )
 from agentic_osdu.schemas import SchemaCatalogStore, SchemaValidationService
 from agentic_osdu.schemas.catalog import LocalSchemaReadCapability, SchemaCatalogError
-from agentic_osdu.state.database import StateDatabase, create_sqlite_state
+from agentic_osdu.state.database import StateDatabase, create_state
 from agentic_osdu.state.models import Base
 from agentic_osdu.state.repositories import StateRepository
 from agentic_osdu.tools.contracts import (
@@ -146,6 +146,7 @@ class RuntimeComposition:
         database: StateDatabase,
         *,
         data_types: DataTypeRegistry = BUILTIN_DATA_TYPES,
+        schema_catalog_path: Path | None = None,
     ) -> None:
         self.data_types = data_types
         self.database = database
@@ -155,7 +156,12 @@ class RuntimeComposition:
         self.jobs = JobService(database.session_factory)
         self.review = ReviewService(self.repository, _DenyOutputPolicy())
         self.schema_catalog_store = SchemaCatalogStore(
-            Path(database.engine.url.database or ".").parent / "schemas"
+            schema_catalog_path
+            or (
+                Path(database.engine.url.database or ".").parent / "schemas"
+                if database.engine.dialect.name == "sqlite"
+                else Path.home() / ".agentic-osdu" / "schemas"
+            )
         )
         self.schema_validation = SchemaValidationService(self.schema_catalog_store)
         self._files: dict[UUID, FileAssetRef] = {}
@@ -199,6 +205,64 @@ class RuntimeComposition:
                 "TOOL-029": self._record_decision,
                 "TOOL-030": self._export,
             }
+        )
+
+    def classification_input(self, file_id: UUID) -> ClassifyDataInput:
+        """Join observed detection and extraction contracts without caller-made references."""
+
+        record = self._require_file_record(file_id)
+        if record.detection is None:
+            raise OrchestrationError(
+                "CLASSIFICATION_INCONCLUSIVE", "The file has no recorded detection."
+            )
+        return ClassifyDataInput(
+            file_id=file_id,
+            detection=record.detection,
+            extracted_metadata=tuple(self._extracted_metadata.get(file_id, ())),
+        )
+
+    def inventory_snapshot(
+        self,
+        inventory_id: UUID,
+        file_ids: tuple[UUID, ...],
+        *,
+        additional_evidence: tuple[EvidenceRecord, ...] = (),
+        additional_provenance: tuple[ProvenanceRecord, ...] = (),
+    ) -> InventoryMutation:
+        """Assemble a bounded inventory mutation from authoritative runtime observations."""
+
+        records = tuple(self._require_file_record(file_id) for file_id in dict.fromkeys(file_ids))
+        selected = set(file_ids)
+        metadata = tuple(
+            item
+            for file_id in dict.fromkeys(file_ids)
+            for item in self._extracted_metadata.get(file_id, ())
+        )
+        return InventoryMutation(
+            inventory_id=inventory_id,
+            files=tuple(self._require_file(record.file.file_id) for record in records),
+            detections=tuple(record.detection for record in records if record.detection),
+            extractions=tuple(item.reference for item in metadata),
+            extracted_metadata=metadata,
+            classifications=tuple(
+                record.classification for record in records if record.classification
+            ),
+            evidence=(
+                *(
+                    item
+                    for item in self._evidence_by_id.values()
+                    if item.source_file_id in selected
+                ),
+                *additional_evidence,
+            ),
+            provenance=(
+                *(
+                    item
+                    for file_id in dict.fromkeys(file_ids)
+                    for item in self._provenance_by_file.get(file_id, ())
+                ),
+                *additional_provenance,
+            ),
         )
 
     def _register_workspace(self, request: ToolRequest[Any]) -> ToolResult[Any]:
@@ -996,17 +1060,24 @@ def create_runtime(
     state_path: Path | None = None,
     *,
     data_types: DataTypeRegistry = BUILTIN_DATA_TYPES,
+    database_url: str | None = None,
+    schema_catalog_path: Path | None = None,
 ) -> RuntimeComposition:
+    if database_url is not None and state_path is not None:
+        raise ValueError("Choose database_url or state_path, not both")
     path = state_path or Path(
         os.environ.get(
             "AGENTIC_OSDU_STATE_PATH",
             Path.home() / ".agentic-osdu" / "state.db",
         )
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    database = create_sqlite_state(f"sqlite:///{path}")
+    if database_url is None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    database = create_state(database_url or f"sqlite:///{path}")
     Base.metadata.create_all(database.engine)
-    composition = RuntimeComposition(database, data_types=data_types)
+    composition = RuntimeComposition(
+        database, data_types=data_types, schema_catalog_path=schema_catalog_path
+    )
     composition.hydrate()
     composition.jobs.recover_interrupted()
     return composition

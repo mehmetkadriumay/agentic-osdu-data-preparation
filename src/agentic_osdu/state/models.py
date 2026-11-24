@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -49,7 +50,7 @@ class FileAssetEntity(Base):
     inventory_id: Mapped[str] = mapped_column(ForeignKey("inventory.id", ondelete="CASCADE"))
     workspace_id: Mapped[str] = mapped_column(String(36), index=True)
     relative_path: Mapped[str] = mapped_column(Text)
-    size_bytes: Mapped[int] = mapped_column(Integer)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
     modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     sha256: Mapped[str | None] = mapped_column(String(64))
     discovery_version: Mapped[int] = mapped_column(Integer)
@@ -61,8 +62,8 @@ class FileSampleEntity(Base):
     __tablename__ = "file_sample"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     file_id: Mapped[str] = mapped_column(ForeignKey("file_asset.id", ondelete="CASCADE"))
-    offset: Mapped[int] = mapped_column(Integer)
-    length: Mapped[int] = mapped_column(Integer)
+    offset: Mapped[int] = mapped_column(BigInteger)
+    length: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
     encoding: Mapped[str | None] = mapped_column(String(64))
     bounded_reference: Mapped[str | None] = mapped_column(Text)

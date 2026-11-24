@@ -1,0 +1,17 @@
+.git
+.venv
+.azure
+**/.azure
+**/.foundry
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+.env.*
+**/*.local.json
+node_modules
+tests
+web
+build
+dist

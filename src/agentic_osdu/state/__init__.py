@@ -1,6 +1,6 @@
-"""Transactional SQLite state for deterministic tools."""
+"""Transactional local and hosted state for deterministic tools."""
 
-from agentic_osdu.state.database import StateDatabase, create_sqlite_state
+from agentic_osdu.state.database import StateDatabase, create_sqlite_state, create_state
 from agentic_osdu.state.repositories import StateConflictError, StateRepository
 
 __all__ = [
@@ -8,4 +8,5 @@ __all__ = [
     "StateDatabase",
     "StateRepository",
     "create_sqlite_state",
+    "create_state",
 ]

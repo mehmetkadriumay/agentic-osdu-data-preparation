@@ -1,4 +1,4 @@
-"""SQLAlchemy 2 SQLite engine and transaction factory."""
+"""SQLAlchemy state boundaries for local SQLite and hosted PostgreSQL."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import Engine, create_engine, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -43,4 +44,22 @@ def create_sqlite_state(url: str, **engine_options: Any) -> StateDatabase:
     )
 
 
-__all__ = ["StateDatabase", "create_sqlite_state"]
+def create_state(url: str, **engine_options: Any) -> StateDatabase:
+    """Keep SQLite policy local and require an explicit PostgreSQL driver."""
+
+    driver = make_url(url).drivername
+    if driver in {"sqlite", "sqlite+pysqlite"}:
+        return create_sqlite_state(url, **engine_options)
+    if driver != "postgresql+psycopg":
+        raise ValueError("State requires sqlite or postgresql+psycopg")
+    engine_options.setdefault("pool_pre_ping", True)
+    engine = create_engine(url, **engine_options)
+    return StateDatabase(
+        engine=engine,
+        session_factory=sessionmaker(
+            engine, expire_on_commit=False, autoflush=False, class_=Session
+        ),
+    )
+
+
+__all__ = ["StateDatabase", "create_sqlite_state", "create_state"]
