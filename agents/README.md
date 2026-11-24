@@ -1,4 +1,4 @@
-# Seven OSDU exploration agents on Microsoft Foundry
+# OSDU exploration agents on Microsoft Foundry
 
 This folder hosts the README's seven exploration steps as **seven independent
 Microsoft Agent Framework agents**, each with its own Foundry deployment and
