@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -98,6 +99,23 @@ def test_tool_json_schemas_match_approved_snapshots() -> None:
                 json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
     assert actual == expected
+
+
+@pytest.mark.parametrize("public_name", ["", "Tool Name", "1_tool", "a" * 65])
+def test_tool_registry_rejects_invalid_public_names(public_name: str) -> None:
+    registry = dict(TOOL_REGISTRY)
+    registry["TOOL-001"] = replace(registry["TOOL-001"], public_name=public_name)
+    with pytest.raises(ValueError, match="invalid public tool name"):
+        validate_tool_registry(registry)
+
+
+def test_tool_registry_rejects_duplicate_public_names() -> None:
+    registry = dict(TOOL_REGISTRY)
+    registry["TOOL-002"] = replace(
+        registry["TOOL-002"], public_name=registry["TOOL-001"].public_name
+    )
+    with pytest.raises(ValueError, match="public tool names must be unique"):
+        validate_tool_registry(registry)
 
 
 def test_generic_request_has_exact_common_fields_and_is_strict() -> None:

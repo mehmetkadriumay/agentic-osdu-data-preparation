@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import re
 from typing import Any, Protocol
 
 from mcp.server import MCPServer
@@ -41,10 +40,9 @@ class RegisteredToolInvoker(Protocol):
 
 
 def mcp_tool_name(definition: ToolDefinition) -> str:
-    """Return a stable, readable MCP name tied to the registry ID."""
+    """Return the explicit public name, independent of display text and audit IDs."""
 
-    slug = re.sub(r"[^a-z0-9]+", "_", definition.name.casefold()).strip("_")
-    return f"{definition.tool_id.casefold().replace('-', '_')}_{slug}"
+    return definition.public_name
 
 
 def _safe_error(error: Exception) -> ErrorEnvelope:

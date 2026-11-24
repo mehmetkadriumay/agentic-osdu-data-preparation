@@ -1127,6 +1127,7 @@ class ToolDefinition:
 
     tool_id: str
     name: str
+    public_name: str
     purpose: str
     version: str
     input_model: type[BaseModel]
@@ -1149,6 +1150,7 @@ class NetworkAccessProfile(StrEnum):
 
 def _tool(
     tool_id: str,
+    public_name: str,
     name: str,
     purpose: str,
     input_model: type[BaseModel],
@@ -1163,6 +1165,7 @@ def _tool(
     return ToolDefinition(
         tool_id=tool_id,
         name=name,
+        public_name=public_name,
         purpose=purpose,
         version="1.0.0",
         input_model=input_model,
@@ -1178,6 +1181,7 @@ def _tool(
 _TOOLS = (
     _tool(
         "TOOL-001",
+        "register_approved_workspace",
         "Register Approved Workspace",
         "Register an approved local workspace root.",
         RegisterWorkspaceInput,
@@ -1187,6 +1191,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-002",
+        "discover_workspace_files",
         "Discover Workspace Files",
         "Recursively discover files under approved include roots.",
         DiscoverFilesInput,
@@ -1194,6 +1199,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-003",
+        "read_bounded_file_sample",
         "Read Bounded File Sample",
         "Read a bounded prefix, text sample, or byte range.",
         ReadFileSampleInput,
@@ -1201,6 +1207,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-004",
+        "detect_file_format",
         "Detect File Format",
         "Detect candidate formats from extension, magic bytes, and bounded structural checks.",
         DetectFormatInput,
@@ -1209,6 +1216,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-005",
+        "classify_subsurface_data",
         "Classify Oil and Gas Data",
         (
             "Classify domain category, subtype, stack, domain, processing, survey, well, "
@@ -1220,6 +1228,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-006",
+        "extract_segy_metadata",
         "Extract SEG-Y Metadata",
         "Extract SEG-Y headers, endian evidence, dimensions, and sampled trace structure.",
         ExtractSegyInput,
@@ -1227,6 +1236,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-007",
+        "extract_las_metadata",
         "Extract LAS Metadata",
         "Extract LAS sections, curves, well metadata, and bounded statistics.",
         ExtractLasInput,
@@ -1234,6 +1244,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-008",
+        "extract_json_well_log_metadata",
         "Extract JSON Well Log Metadata",
         "Stream and validate JSON Well Log metadata, curves, and data shape.",
         ExtractJsonWellLogInput,
@@ -1241,6 +1252,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-009",
+        "extract_dlis_metadata",
         "Extract DLIS Metadata",
         "Extract DLIS logical files, frames, channels, origins, and well metadata.",
         ExtractDlisInput,
@@ -1248,6 +1260,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-010",
+        "extract_lis_lti_metadata",
         "Extract LIS/LTI Metadata",
         "Extract LIS/LTI record and well-log metadata.",
         ExtractLisInput,
@@ -1255,6 +1268,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-011",
+        "extract_csv_metadata",
         "Extract CSV Metadata",
         "Extract CSV delimiter, headers, bounded row samples, and shape.",
         ExtractCsvInput,
@@ -1262,6 +1276,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-012",
+        "extract_p190_navigation_metadata",
         "Extract P1/90 Navigation Metadata",
         "Parse P1/90 headers, navigation positions, line summaries, and coordinate evidence.",
         ExtractP190Input,
@@ -1269,6 +1284,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-013",
+        "extract_interpretation_and_document_metadata",
         "Extract Interpretation and Document Metadata",
         "Parse SGP, DAT, text, and PDF metadata through explicit subtype contracts.",
         ExtractInterpretationInput,
@@ -1276,6 +1292,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-014",
+        "read_and_parse_manifests",
         "Read and Parse Manifests",
         "Discover and parse JSON manifests within the approved manifest root.",
         ParseManifestsInput,
@@ -1283,6 +1300,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-015",
+        "extract_manifest_records_and_dataset_references",
         "Extract Manifest Records and Dataset References",
         "Extract manifest records, kinds, surrogate IDs, dataset paths, and relationships.",
         ExtractManifestRecordsInput,
@@ -1290,6 +1308,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-016",
+        "match_manifest",
         "Match Manifest",
         "Score and rank data-to-manifest associations using explicit precedence rules.",
         MatchManifestInput,
@@ -1299,6 +1318,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-017",
+        "learn_manifest_patterns",
         "Learn Manifest Patterns",
         "Learn category-scoped patterns from approved non-generated manifest pairs.",
         LearnManifestPatternsInput,
@@ -1307,6 +1327,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-018",
+        "generate_one_manifest",
         "Generate One Manifest",
         "Generate one review-required manifest candidate using a selected learning model.",
         GenerateManifestInput,
@@ -1318,6 +1339,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-019",
+        "generate_all_missing_manifests",
         "Generate All Missing Manifests",
         "Generate candidates for all eligible unmatched inventory records.",
         GenerateAllManifestsInput,
@@ -1329,6 +1351,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-020",
+        "validate_osdu_schemas",
         "Validate OSDU Schemas",
         "Validate a manifest document and records against exact pinned OSDU schemas.",
         ValidateSchemasInput,
@@ -1337,6 +1360,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-021",
+        "refresh_or_import_schema_catalog",
         "Refresh or Import Schema Catalog",
         "Refresh or import a pinned schema catalog under explicit network or local policy.",
         RefreshSchemaCatalogInput,
@@ -1348,6 +1372,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-022",
+        "persist_inventory",
         "Persist Inventory",
         "Create or update versioned inventory and file records transactionally.",
         PersistInventoryInput,
@@ -1357,6 +1382,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-023",
+        "persist_manifest_associations",
         "Persist Manifest Associations",
         "Persist manifest associations and human review decisions.",
         PersistAssociationsInput,
@@ -1366,6 +1392,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-024",
+        "persist_learning_models",
         "Persist Learning Models",
         (
             "Persist, version, activate, deactivate, or clear learning models without "
@@ -1379,6 +1406,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-025",
+        "track_job_execution",
         "Track Job Execution",
         "Create and execute a persisted job with typed steps and bounded concurrency.",
         TrackJobInput,
@@ -1388,6 +1416,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-026",
+        "query_or_cancel_job",
         "Query or Cancel Job",
         "Request cancellation and query persisted job snapshots and ordered events.",
         QueryOrCancelJobInput,
@@ -1397,6 +1426,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-027",
+        "build_inventory_review_view",
         "Build Inventory Review View",
         "Build a redacted inventory review projection with filtering, sorting, and summaries.",
         BuildInventoryReviewInput,
@@ -1405,6 +1435,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-028",
+        "build_manifest_review_view",
         "Build Manifest Review View",
         (
             "Build a manifest detail view with validation, provenance, association, and "
@@ -1416,6 +1447,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-029",
+        "record_review_decision",
         "Record Review Decision",
         "Record an approve, reject, or needs-changes decision for a versioned review target.",
         RecordReviewDecisionInput,
@@ -1425,6 +1457,7 @@ _TOOLS = (
     ),
     _tool(
         "TOOL-030",
+        "export_approved_results",
         "Export Approved Results",
         "Export machine-readable reports and approved candidate manifests.",
         ExportToolInput,
@@ -1448,9 +1481,15 @@ def validate_tool_registry(registry: Mapping[str, ToolDefinition]) -> None:
         raise ValueError("tool registry must contain ordered TOOL-001 through TOOL-030")
     input_models: set[type[BaseModel]] = set()
     output_models: set[type[BaseModel]] = set()
+    public_names: set[str] = set()
     for key, definition in registry.items():
         if definition.tool_id != key:
             raise ValueError("tool registry key does not match definition")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", definition.public_name):
+            raise ValueError(f"{key} has an invalid public tool name")
+        if definition.public_name in public_names:
+            raise ValueError("public tool names must be unique")
+        public_names.add(definition.public_name)
         if not re.fullmatch(
             r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)",
             definition.version,

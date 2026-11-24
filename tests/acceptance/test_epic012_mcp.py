@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tomllib
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,15 @@ def test_mcp_enumerates_all_registered_tools_with_registry_metadata_and_schemas(
         )
         assert tool.output_schema is not None
         assert "errors" in json.dumps(tool.output_schema)
+
+
+def test_mcp_public_names_are_descriptive_and_independent_of_audit_ids_and_titles() -> None:
+    definition = TOOL_REGISTRY["TOOL-006"]
+    assert mcp_tool_name(definition) == "extract_segy_metadata"
+    assert mcp_tool_name(replace(definition, name="A revised display title")) == (
+        "extract_segy_metadata"
+    )
+    assert all(not mcp_tool_name(tool).startswith("tool_") for tool in TOOL_REGISTRY.values())
 
 
 def test_mcp_dispatches_through_the_existing_typed_registry() -> None:

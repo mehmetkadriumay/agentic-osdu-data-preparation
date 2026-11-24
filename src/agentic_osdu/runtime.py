@@ -6,11 +6,13 @@ import os
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4, uuid5
 
 from agentic_osdu.agents.orchestrator import OrchestrationError, ToolRegistryAdapter
+from agentic_osdu.data_types import BUILTIN_DATA_TYPES, DataTypeRegistry
 from agentic_osdu.domain.models import (
     ApprovedAbsolutePath,
     EvidenceRecord,
@@ -20,16 +22,6 @@ from agentic_osdu.domain.models import (
     ProvenanceRecord,
     TrustLevel,
     ValidationStatus,
-)
-from agentic_osdu.formats.interpretation import extract_interpretation
-from agentic_osdu.formats.navigation import extract_p190
-from agentic_osdu.formats.segy import extract_segy
-from agentic_osdu.formats.supporting import extract_csv
-from agentic_osdu.formats.well_logs import (
-    extract_dlis,
-    extract_json_well_log,
-    extract_las,
-    extract_lis,
 )
 from agentic_osdu.jobs.service import JobCancelled, JobError, JobExecutionContext, JobService
 from agentic_osdu.manifests.generate import GenerationItem, GenerationService
@@ -57,21 +49,12 @@ from agentic_osdu.tools.contracts import (
     DetectFormatOutput,
     DiscoveryOutput,
     ExportToolInput,
-    ExtractCsvInput,
-    ExtractDlisInput,
     ExtractedMetadataContract,
-    ExtractInterpretationInput,
-    ExtractJsonWellLogInput,
-    ExtractLasInput,
-    ExtractLisInput,
     ExtractManifestRecordsInput,
-    ExtractP190Input,
-    ExtractSegyInput,
     FileRecordContract,
     FileSampleOutput,
     GenerateAllManifestsInput,
     GenerateManifestInput,
-    InterpretationSubtype,
     InventoryMutation,
     LearningModelContract,
     LearnManifestPatternsInput,
@@ -102,34 +85,6 @@ from agentic_osdu.tools.discovery import (
     workspace_policy_fingerprint,
 )
 from agentic_osdu.tools.review import ReviewService
-
-_TOOL_FORMATS = {
-    "TOOL-006": FormatId.SEGY,
-    "TOOL-007": FormatId.LAS,
-    "TOOL-008": FormatId.JSON_WELL_LOG,
-    "TOOL-009": FormatId.DLIS,
-    "TOOL-010": FormatId.LIS_LTI,
-    "TOOL-011": FormatId.CSV,
-    "TOOL-012": FormatId.P190,
-    "TOOL-013": FormatId.TEXT,
-}
-
-_FORMAT_TOOL_INPUTS: dict[FormatId, tuple[str, Callable[..., Any]]] = {
-    FormatId.SEGY: ("TOOL-006", ExtractSegyInput),
-    FormatId.LAS: ("TOOL-007", ExtractLasInput),
-    FormatId.JSON_WELL_LOG: ("TOOL-008", ExtractJsonWellLogInput),
-    FormatId.DLIS: ("TOOL-009", ExtractDlisInput),
-    FormatId.LIS_LTI: ("TOOL-010", ExtractLisInput),
-    FormatId.CSV: ("TOOL-011", ExtractCsvInput),
-    FormatId.P190: ("TOOL-012", ExtractP190Input),
-}
-
-_INTERPRETATION_SUBTYPES = {
-    FormatId.SGP: InterpretationSubtype.SGP,
-    FormatId.DAT: InterpretationSubtype.DAT,
-    FormatId.TEXT: InterpretationSubtype.TEXT,
-    FormatId.PDF: InterpretationSubtype.PDF,
-}
 
 
 class _DenyOutputPolicy:
@@ -186,7 +141,13 @@ def _result(
 class RuntimeComposition:
     """Own the stateful dependencies behind the registered tool adapter."""
 
-    def __init__(self, database: StateDatabase) -> None:
+    def __init__(
+        self,
+        database: StateDatabase,
+        *,
+        data_types: DataTypeRegistry = BUILTIN_DATA_TYPES,
+    ) -> None:
+        self.data_types = data_types
         self.database = database
         self.repository = StateRepository(database.session_factory)
         self.workspace_store = InMemoryWorkspacePolicyStore()
@@ -216,18 +177,10 @@ class RuntimeComposition:
                 "TOOL-003": self._read_sample,
                 "TOOL-004": self._detect,
                 "TOOL-005": self._classify,
-                "TOOL-006": lambda request: self._extract_format("TOOL-006", extract_segy, request),
-                "TOOL-007": lambda request: self._extract_format("TOOL-007", extract_las, request),
-                "TOOL-008": lambda request: self._extract_format(
-                    "TOOL-008", extract_json_well_log, request
-                ),
-                "TOOL-009": lambda request: self._extract_format("TOOL-009", extract_dlis, request),
-                "TOOL-010": lambda request: self._extract_format("TOOL-010", extract_lis, request),
-                "TOOL-011": lambda request: self._extract_format("TOOL-011", extract_csv, request),
-                "TOOL-012": lambda request: self._extract_format("TOOL-012", extract_p190, request),
-                "TOOL-013": lambda request: self._extract_format(
-                    "TOOL-013", extract_interpretation, request
-                ),
+                **{
+                    tool_id: partial(self._extract_format, tool_id)
+                    for tool_id in self.data_types.extraction_tool_ids
+                },
                 "TOOL-014": self._parse_manifests,
                 "TOOL-015": self._extract_manifest_records,
                 "TOOL-016": self._match_manifest,
@@ -275,7 +228,7 @@ class RuntimeComposition:
         samples = tuple(
             self._require_sample(sample_id).decoded_bytes() for sample_id in value.sample_refs
         )
-        outcome = detect_format(file, samples)
+        outcome = detect_format(file, samples, data_types=self.data_types)
         current = self._file_records.get(file.file_id, FileRecordContract(file=file))
         self._file_records[file.file_id] = current.model_copy(
             update={"detection": outcome.output.detection}
@@ -293,7 +246,7 @@ class RuntimeComposition:
     def _classify(self, request: ToolRequest[Any]) -> ToolResult[Any]:
         value: ClassifyDataInput = request.input
         file = self._require_file(value.file_id)
-        outcome = classify_data(value, file)
+        outcome = classify_data(value, file, data_types=self.data_types)
         current = self._file_records.get(file.file_id, FileRecordContract(file=file))
         self._file_records[file.file_id] = current.model_copy(
             update={
@@ -317,6 +270,7 @@ class RuntimeComposition:
         tool_id: str,
         request: ToolRequest[Any],
         outcome: Any,
+        format_id: FormatId,
     ) -> ToolResult[Any]:
         file = self._require_file(request.input.file_id)
         if file.sha256 is None:
@@ -336,16 +290,7 @@ class RuntimeComposition:
             ),
             file_id=file.file_id,
             file_sha256=file.sha256,
-            format_id=(
-                {
-                    InterpretationSubtype.SGP: FormatId.SGP,
-                    InterpretationSubtype.DAT: FormatId.DAT,
-                    InterpretationSubtype.TEXT: FormatId.TEXT,
-                    InterpretationSubtype.PDF: FormatId.PDF,
-                }[request.input.subtype]
-                if tool_id == "TOOL-013"
-                else _TOOL_FORMATS[tool_id]
-            ),
+            format_id=format_id,
             parser_version=TOOL_REGISTRY[tool_id].version,
             extracted_at=datetime.now(UTC),
             evidence_ids=tuple(item.evidence_id for item in outcome.evidence),
@@ -374,17 +319,20 @@ class RuntimeComposition:
     def _extract_format(
         self,
         tool_id: str,
-        extractor: Callable[..., Any],
         request: ToolRequest[Any],
     ) -> ToolResult[Any]:
+        handler = self.data_types.extraction_handler(tool_id, request.input)
+        binding = handler.extraction
+        assert binding is not None
         return self._record_extraction(
             tool_id,
             request,
-            extractor(
+            binding.extractor(
                 request.input,
                 self.discovery.format_source(request.input.file_id),
                 cancellation=self._current_cancellation(),
             ),
+            handler.format_id,
         )
 
     def _parse_manifests(self, request: ToolRequest[Any]) -> ToolResult[Any]:
@@ -676,23 +624,13 @@ class RuntimeComposition:
                         extracted: tuple[ExtractedMetadataContract, ...] = ()
                         if detection.candidates:
                             format_id = detection.candidates[0].format_id
-                            binding = _FORMAT_TOOL_INPUTS.get(format_id)
+                            handler = self.data_types.get(format_id)
+                            binding = handler.extraction if handler is not None else None
                             if binding is not None:
-                                extractor_tool, input_factory = binding
                                 self._invoke_child(
-                                    extractor_tool,
+                                    binding.tool_id,
                                     request,
-                                    input_factory(file.file_id),
-                                    cancellation=context.cancelled,
-                                )
-                            elif format_id in _INTERPRETATION_SUBTYPES:
-                                self._invoke_child(
-                                    "TOOL-013",
-                                    request,
-                                    ExtractInterpretationInput(
-                                        file_id=file.file_id,
-                                        subtype=_INTERPRETATION_SUBTYPES[format_id],
-                                    ),
+                                    binding.build_input(file.file_id),
                                     cancellation=context.cancelled,
                                 )
                             extracted = tuple(self._extracted_metadata.get(file.file_id, ()))
@@ -1054,7 +992,11 @@ class _CancellationView:
         return self._callback is not None and self._callback()
 
 
-def create_runtime(state_path: Path | None = None) -> RuntimeComposition:
+def create_runtime(
+    state_path: Path | None = None,
+    *,
+    data_types: DataTypeRegistry = BUILTIN_DATA_TYPES,
+) -> RuntimeComposition:
     path = state_path or Path(
         os.environ.get(
             "AGENTIC_OSDU_STATE_PATH",
@@ -1064,7 +1006,7 @@ def create_runtime(state_path: Path | None = None) -> RuntimeComposition:
     path.parent.mkdir(parents=True, exist_ok=True)
     database = create_sqlite_state(f"sqlite:///{path}")
     Base.metadata.create_all(database.engine)
-    composition = RuntimeComposition(database)
+    composition = RuntimeComposition(database, data_types=data_types)
     composition.hydrate()
     composition.jobs.recover_interrupted()
     return composition

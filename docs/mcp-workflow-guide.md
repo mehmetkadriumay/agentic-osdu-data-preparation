@@ -9,6 +9,10 @@ approved exports.
 The MCP server prepares data and manifests only. It does not ingest records
 into OSDU.
 
+MCP names are descriptive and no longer carry numeric `tool_001_` prefixes.
+Internal `TOOL-001` through `TOOL-030` IDs remain unchanged. Refresh MCP tool
+discovery and update saved prompts or allowlists that use the old names.
+
 ## 1. Example workspace
 
 Use a workspace with explicit source and output directories:
@@ -115,7 +119,7 @@ versions, paths, checksums, or approval receipts.
 Copilot first calls:
 
 ```text
-tool_001_register_approved_workspace
+register_approved_workspace
 ```
 
 The request identifies the absolute workspace root, approved source
@@ -150,26 +154,26 @@ Copilot executes this dependency chain:
 
 | Order | MCP tool | Purpose |
 |---|---|---|
-| 1 | `tool_002_discover_workspace_files` | Enumerate files below the approved `Data` root. |
-| 2 | `tool_003_read_bounded_file_sample` | Read only the bounded bytes or text needed for identification. |
-| 3 | `tool_004_detect_file_format` | Combine extension, magic bytes, and structural evidence. |
-| 4 | `tool_006` through `tool_013` extractors | Extract format-specific metadata for each compatible file. |
-| 5 | `tool_005_classify_oil_and_gas_data` | Produce the normalized domain classification and OSDU-kind recommendation. |
-| 6 | `tool_022_persist_inventory` | Persist the joined, versioned inventory transactionally. |
-| 7 | `tool_027_build_inventory_review_view` | Build a redacted table for human review. |
+| 1 | `discover_workspace_files` | Enumerate files below the approved `Data` root. |
+| 2 | `read_bounded_file_sample` | Read only the bounded bytes or text needed for identification. |
+| 3 | `detect_file_format` | Combine extension, magic bytes, and structural evidence. |
+| 4 | the format-specific metadata extractors listed below | Extract format-specific metadata for each compatible file. |
+| 5 | `classify_subsurface_data` | Produce the normalized domain classification and OSDU-kind recommendation. |
+| 6 | `persist_inventory` | Persist the joined, versioned inventory transactionally. |
+| 7 | `build_inventory_review_view` | Build a redacted table for human review. |
 
 The format-specific tools are:
 
 | Tool | Use |
 |---|---|
-| `tool_006_extract_seg_y_metadata` | SEG-Y headers, endianness, dimensions, and sampled trace structure |
-| `tool_007_extract_las_metadata` | LAS sections, curves, well metadata, and bounded statistics |
-| `tool_008_extract_json_well_log_metadata` | JSON well-log metadata, curves, and data shape |
-| `tool_009_extract_dlis_metadata` | DLIS logical files, frames, channels, origins, and well metadata |
-| `tool_010_extract_lis_lti_metadata` | LIS/LTI records and well-log metadata |
-| `tool_011_extract_csv_metadata` | CSV delimiter, headers, row samples, and shape |
-| `tool_012_extract_p1_90_navigation_metadata` | P1/90 headers, navigation positions, lines, and coordinates |
-| `tool_013_extract_interpretation_and_document_metadata` | Explicit SGP, DAT, text, and PDF subtype metadata |
+| `extract_segy_metadata` | SEG-Y headers, endianness, dimensions, and sampled trace structure |
+| `extract_las_metadata` | LAS sections, curves, well metadata, and bounded statistics |
+| `extract_json_well_log_metadata` | JSON well-log metadata, curves, and data shape |
+| `extract_dlis_metadata` | DLIS logical files, frames, channels, origins, and well metadata |
+| `extract_lis_lti_metadata` | LIS/LTI records and well-log metadata |
+| `extract_csv_metadata` | CSV delimiter, headers, row samples, and shape |
+| `extract_p190_navigation_metadata` | P1/90 headers, navigation positions, lines, and coordinates |
+| `extract_interpretation_and_document_metadata` | Explicit SGP, DAT, text, and PDF subtype metadata |
 
 Review low-confidence or conflicting classifications before using them for
 manifest generation. Detection and classification results are derived
@@ -188,13 +192,13 @@ Persist proposed associations, but do not treat heuristic matches as approved.
 
 Copilot calls:
 
-1. `tool_014_read_and_parse_manifests` to discover and parse JSON manifests.
-2. `tool_015_extract_manifest_records_and_dataset_references` to index record
+1. `read_and_parse_manifests` to discover and parse JSON manifests.
+2. `extract_manifest_records_and_dataset_references` to index record
    kinds, surrogate IDs, dataset paths, and relationships.
-3. `tool_016_match_manifest` once per eligible file to rank candidates using
+3. `match_manifest` once per eligible file to rank candidates using
    explicit precedence rules.
-4. `tool_023_persist_manifest_associations` to save the versioned proposals.
-5. `tool_028_build_manifest_review_view` for detailed manifest, association,
+4. `persist_manifest_associations` to save the versioned proposals.
+5. `build_manifest_review_view` for detailed manifest, association,
    provenance, and validation evidence.
 
 `TOOL-016` output is heuristic and review-required. A high score is evidence,
@@ -205,8 +209,8 @@ not human approval.
 Use:
 
 ```text
-tool_027_build_inventory_review_view
-tool_028_build_manifest_review_view
+build_inventory_review_view
+build_manifest_review_view
 ```
 
 Ask Copilot to highlight:
@@ -236,9 +240,9 @@ activate or mutate the model until I approve the signed workflow action.
 
 The workflow uses:
 
-1. `tool_017_learn_manifest_patterns` to derive patterns from approved,
+1. `learn_manifest_patterns` to derive patterns from approved,
    non-generated examples.
-2. `tool_024_persist_learning_models` to create, activate, deactivate, or
+2. `persist_learning_models` to create, activate, deactivate, or
    clear a model version.
 
 Direct MCP mutations through `TOOL-024` fail with
@@ -251,7 +255,7 @@ the user approved an action.
 For an approved local catalog, Copilot can call:
 
 ```text
-tool_021_refresh_or_import_schema_catalog
+refresh_or_import_schema_catalog
 ```
 
 The local catalog must be contained within the persisted approved workspace
@@ -281,9 +285,9 @@ a review decision.
 
 Copilot calls:
 
-1. `tool_018_generate_one_manifest` with `dry_run` enabled.
-2. `tool_020_validate_osdu_schemas` using the exact pinned catalog ID.
-3. `tool_028_build_manifest_review_view` to display the candidate, source
+1. `generate_one_manifest` with `dry_run` enabled.
+2. `validate_osdu_schemas` using the exact pinned catalog ID.
+3. `build_manifest_review_view` to display the candidate, source
    evidence, generation diff, validation report, and provenance.
 
 Generated fields have heuristic trust and remain review-required. Direct MCP
@@ -317,12 +321,12 @@ After signed approval, WF-005 executes:
 
 | Order | Tool | Purpose |
 |---|---|---|
-| 1 | `tool_025_track_job_execution` | Create the approved persisted job. |
-| 2 | `tool_019_generate_all_missing_manifests` | Generate bounded candidate manifests. |
-| 3 | `tool_020_validate_osdu_schemas` | Validate each candidate against the pinned catalog. |
-| 4 | `tool_022_persist_inventory` | Persist candidate inventory state. |
-| 5 | `tool_023_persist_manifest_associations` | Persist proposed generated associations. |
-| 6 | `tool_027_build_inventory_review_view` | Produce the joined batch review view. |
+| 1 | `track_job_execution` | Create the approved persisted job. |
+| 2 | `generate_all_missing_manifests` | Generate bounded candidate manifests. |
+| 3 | `validate_osdu_schemas` | Validate each candidate against the pinned catalog. |
+| 4 | `persist_inventory` | Persist candidate inventory state. |
+| 5 | `persist_manifest_associations` | Persist proposed generated associations. |
+| 6 | `build_inventory_review_view` | Produce the joined batch review view. |
 
 Direct MCP write-mode generation and WF-005 job creation fail closed unless
 they execute through the signed workflow boundary.
@@ -332,7 +336,7 @@ they execute through the signed workflow boundary.
 Use:
 
 ```text
-tool_026_query_or_cancel_job
+query_or_cancel_job
 ```
 
 Example prompt:
@@ -360,10 +364,10 @@ and exact export destination. Stop for my decision.
 
 The workflow uses:
 
-1. `tool_028_build_manifest_review_view`;
-2. optional `tool_020_validate_osdu_schemas`;
-3. `tool_029_record_review_decision`;
-4. optional `tool_030_export_approved_results`.
+1. `build_manifest_review_view`;
+2. optional `validate_osdu_schemas`;
+3. `record_review_decision`;
+4. optional `export_approved_results`.
 
 `TOOL-029` and `TOOL-030` are human actions. Direct MCP calls fail with
 `HUMAN_APPROVAL_REQUIRED`; they must execute through the signed WF-006 review
@@ -437,36 +441,36 @@ The following prompts keep Copilot within the intended gates:
 
 | ID | MCP name | Role in a workflow |
 |---|---|---|
-| TOOL-001 | `tool_001_register_approved_workspace` | Establish the path and write policy |
-| TOOL-002 | `tool_002_discover_workspace_files` | Discover bounded source files |
-| TOOL-003 | `tool_003_read_bounded_file_sample` | Read bounded identification evidence |
-| TOOL-004 | `tool_004_detect_file_format` | Detect candidate formats |
-| TOOL-005 | `tool_005_classify_oil_and_gas_data` | Normalize oil-and-gas classification |
-| TOOL-006 | `tool_006_extract_seg_y_metadata` | Extract SEG-Y metadata |
-| TOOL-007 | `tool_007_extract_las_metadata` | Extract LAS metadata |
-| TOOL-008 | `tool_008_extract_json_well_log_metadata` | Extract JSON well-log metadata |
-| TOOL-009 | `tool_009_extract_dlis_metadata` | Extract DLIS metadata |
-| TOOL-010 | `tool_010_extract_lis_lti_metadata` | Extract LIS/LTI metadata |
-| TOOL-011 | `tool_011_extract_csv_metadata` | Extract CSV metadata |
-| TOOL-012 | `tool_012_extract_p1_90_navigation_metadata` | Extract P1/90 navigation metadata |
-| TOOL-013 | `tool_013_extract_interpretation_and_document_metadata` | Extract SGP, DAT, text, or PDF metadata |
-| TOOL-014 | `tool_014_read_and_parse_manifests` | Parse supplied manifests |
-| TOOL-015 | `tool_015_extract_manifest_records_and_dataset_references` | Index manifest records and references |
-| TOOL-016 | `tool_016_match_manifest` | Rank file-to-manifest matches |
-| TOOL-017 | `tool_017_learn_manifest_patterns` | Derive patterns from approved pairs |
-| TOOL-018 | `tool_018_generate_one_manifest` | Dry-run or approved single generation |
-| TOOL-019 | `tool_019_generate_all_missing_manifests` | Approved batch generation |
-| TOOL-020 | `tool_020_validate_osdu_schemas` | Validate against exact pinned schemas |
-| TOOL-021 | `tool_021_refresh_or_import_schema_catalog` | Import or approved-refresh schema catalogs |
-| TOOL-022 | `tool_022_persist_inventory` | Persist versioned inventory state |
-| TOOL-023 | `tool_023_persist_manifest_associations` | Persist association state |
-| TOOL-024 | `tool_024_persist_learning_models` | Persist approved learning-model state |
-| TOOL-025 | `tool_025_track_job_execution` | Create and execute bounded jobs |
-| TOOL-026 | `tool_026_query_or_cancel_job` | Query or cooperatively cancel jobs |
-| TOOL-027 | `tool_027_build_inventory_review_view` | Build the inventory review projection |
-| TOOL-028 | `tool_028_build_manifest_review_view` | Build manifest details and generation diff |
-| TOOL-029 | `tool_029_record_review_decision` | Record a signed human decision |
-| TOOL-030 | `tool_030_export_approved_results` | Export approved reviewed results |
+| TOOL-001 | `register_approved_workspace` | Establish the path and write policy |
+| TOOL-002 | `discover_workspace_files` | Discover bounded source files |
+| TOOL-003 | `read_bounded_file_sample` | Read bounded identification evidence |
+| TOOL-004 | `detect_file_format` | Detect candidate formats |
+| TOOL-005 | `classify_subsurface_data` | Normalize oil-and-gas classification |
+| TOOL-006 | `extract_segy_metadata` | Extract SEG-Y metadata |
+| TOOL-007 | `extract_las_metadata` | Extract LAS metadata |
+| TOOL-008 | `extract_json_well_log_metadata` | Extract JSON well-log metadata |
+| TOOL-009 | `extract_dlis_metadata` | Extract DLIS metadata |
+| TOOL-010 | `extract_lis_lti_metadata` | Extract LIS/LTI metadata |
+| TOOL-011 | `extract_csv_metadata` | Extract CSV metadata |
+| TOOL-012 | `extract_p190_navigation_metadata` | Extract P1/90 navigation metadata |
+| TOOL-013 | `extract_interpretation_and_document_metadata` | Extract SGP, DAT, text, or PDF metadata |
+| TOOL-014 | `read_and_parse_manifests` | Parse supplied manifests |
+| TOOL-015 | `extract_manifest_records_and_dataset_references` | Index manifest records and references |
+| TOOL-016 | `match_manifest` | Rank file-to-manifest matches |
+| TOOL-017 | `learn_manifest_patterns` | Derive patterns from approved pairs |
+| TOOL-018 | `generate_one_manifest` | Dry-run or approved single generation |
+| TOOL-019 | `generate_all_missing_manifests` | Approved batch generation |
+| TOOL-020 | `validate_osdu_schemas` | Validate against exact pinned schemas |
+| TOOL-021 | `refresh_or_import_schema_catalog` | Import or approved-refresh schema catalogs |
+| TOOL-022 | `persist_inventory` | Persist versioned inventory state |
+| TOOL-023 | `persist_manifest_associations` | Persist association state |
+| TOOL-024 | `persist_learning_models` | Persist approved learning-model state |
+| TOOL-025 | `track_job_execution` | Create and execute bounded jobs |
+| TOOL-026 | `query_or_cancel_job` | Query or cooperatively cancel jobs |
+| TOOL-027 | `build_inventory_review_view` | Build the inventory review projection |
+| TOOL-028 | `build_manifest_review_view` | Build manifest details and generation diff |
+| TOOL-029 | `record_review_decision` | Record a signed human decision |
+| TOOL-030 | `export_approved_results` | Export approved reviewed results |
 
 ## 16. Failure handling
 
