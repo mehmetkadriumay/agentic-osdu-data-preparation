@@ -1,0 +1,9 @@
+.azure/
+.foundry/
+.venv/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+*.local.json
+run.py

@@ -1,103 +1,75 @@
 # OSDU exploration agents on Microsoft Foundry
 
-This folder hosts the README's seven exploration steps as **seven independent
-Microsoft Agent Framework agents**, each with its own Foundry deployment and
-Entra agent identity. It does not replace the existing `src\agentic_osdu\agents`
-roles, which also cover manifest workflows.
+Each specialist is a separately callable Microsoft Agent Framework agent, with
+its own `main.py`, `agent.py`, `instructions.txt`, `requirements.txt`, and
+`.agentignore`. There is no shared `OSDU_STAGE` switch, `run_stage` wrapper, or
+global stage counter. Existing `src\agentic_osdu\agents` contains different,
+domain-level manifest workflows and is not the hosted-agent directory.
 
-The shared backend uses Azure Container Apps, an **Azure Files share mounted
-read-only**, and PostgreSQL Flexible Server. No laptop filesystem is reachable
-from Foundry: upload an approved copy of the source data first.
-
-## Architecture and responsibilities
+## Repository boundaries
 
 ```text
-run_pipeline.py -- caller identity, checks real backend receipts
-  -> seven Foundry Responses endpoints, in order
-       -> one stage-specific Agent Framework Python tool per agent
-            -> authenticated HTTPS stage adapter on Container Apps
-                 -> existing typed deterministic tool registry and data-type handlers
-                 -> /mnt/source/Data on read-only Azure Files
-                 -> PostgreSQL inventory, run ledger, evidence, and provenance
+src\agentic_osdu\             Deterministic domain tools, parsers, policies, state
+mcp_servers\
+  workspace_discovery\       Workspace, Data-only discovery, bounded detection
+  extraction\                Evidence-selected extensible parser dispatch
+  classification\            Classification from authoritative observations
+  inventory_review\          Failure accounting, snapshots, paginated review
+  shared\                    Operation use cases, concurrency, durable receipts
+  host\                      Entra-authenticated MCP composition and Dockerfile
+agents\
+  approve-workspace\         Standalone workspace specialist
+  discover-formats\          Standalone discovery/detection specialist
+  extract-metadata\          Standalone extraction specialist
+  classify-data\             Standalone classification specialist
+  account-failures\          Standalone failure-accounting specialist
+  persist-inventory\         Standalone inventory specialist
+  review-inventory\          Standalone review specialist
+  shared\osdu_agent_host\    Hosting, credentials, MCP transport plumbing only
+  invoke.py                  Independent invocation CLI
+swarms\exploration\           Supervisor, instructions, hosted entry point, runner
+deployment\                  Foundry manifest and infrastructure templates
+scripts\                     Explicit packaging, deployment, access configuration
 ```
 
-| Step | Foundry service | Deterministic capabilities |
+The specialist decides how to address its caller's task using its own tools.
+The supervisor selects specialists and delegates independent file tasks
+concurrently; it does not own parsing, evidence, identifiers, or inventory data.
+The MCP server owns those deterministic operations and validates capabilities.
+See [MCP servers](../mcp_servers/README.md) and [swarm execution](../swarms/README.md).
+
+| Agent / role ID | MCP endpoint suffix | Capabilities |
 | --- | --- | --- |
-| 1 | `approve-workspace` | `register_approved_workspace` |
-| 2 | `discover-formats` | Discovery, bounded sampling, format detection |
-| 3 | `extract-metadata` | Registered format-specific extractors |
-| 4 | `classify-data` | `classify_subsurface_data` |
-| 5 | `account-failures` | Read/account for the run's actual file outcomes; no new parsing |
-| 6 | `persist-inventory` | Persist an authoritative inventory mutation with optimistic concurrency |
-| 7 | `review-inventory` | Paginate the inventory review and join persisted metadata |
+| `approve-workspace` / 1 | `workspace-discovery/` | `register_source_workspace` |
+| `discover-formats` / 2 | `workspace-discovery/` | `discover_source_files`, `inspect_file_format` |
+| `extract-metadata` / 3 | `extraction/` | `extract_detected_metadata` |
+| `classify-data` / 4 | `classification/` | `classify_observed_file` |
+| `account-failures` / 5 | `inventory-review/` | `account_file_failures` |
+| `persist-inventory` / 6 | `inventory-review/` | `persist_observed_inventory` |
+| `review-inventory` / 7 | `inventory-review/` | `review_persisted_inventory` |
 
-`azure.yaml` deploys the same small host with seven different `OSDU_STAGE` values.
-`osdu_foundry\stages.py` defines their responsibilities and backend capabilities.
-Each model can call only its fixed `run_stage` function. The backend independently
-binds the authenticated principal to that stage, enforces ordering and immutable
-run configuration, and records verified stage principal IDs.
+All endpoints are beneath `https://<backend-host>/mcp/`. The role IDs are explicit
+identity permissions, **not execution order**. An extraction needs a real
+detected file, not completion of another file's work or an entire pipeline.
+A review needs an existing inventory, not new discovery.
 
-**Important transport distinction:** the cloud endpoint is a restricted staged
-HTTP adapter over the **same registered implementations used by MCP**, not the
-local unauthenticated API or a public copy of all 30 MCP tools. Agents cannot
-choose arbitrary tool names, URLs, paths, Python code, or inventory payloads.
-The local stdio/loopback MCP transports retain their existing behavior.
+## Deploy the MCP host and selected agents
 
-The backend owns identifiers, extraction references, evidence, and persistence.
-Models do not copy file lists or construct metadata references between stages.
-The launcher verifies the backend receipt after each model response rather than
-trusting an agent's claim of success. Full raw samples are not sent to the model
-or retained in the run ledger.
+Prerequisites: authenticated `az`/`azd` with hosted-agent/project extensions,
+an existing Foundry project and chat model, appropriate region/quota and inference
+permissions, an Entra API application configured for v2 access tokens, and approval
+for infrastructure spend and source-data residency. The backend audience is that
+API application's client GUID, **not** a management API or project managed identity.
+Its scope is the application's URI plus `/.default`.
 
-## Prerequisites
+The infrastructure provisions Azure Container Apps, a read-only Azure Files mount,
+private PostgreSQL, ACR with admin access disabled, networking, and logs. Hosted
+agents, storage, infrastructure and model invocations are billable. Source metadata
+can enter model context; obtain the relevant data-residency approval first.
 
-1. Use PowerShell 7, Python 3.13 for the hosted agents, Azure CLI, and Azure
-   Developer CLI >=1.36 with the `azure.ai.agents` and `azure.ai.projects`
-   extensions. Authenticate interactively yourself before running deployment.
-   The scripts never log you in or silently select the active subscription.
-2. Provide an **existing Foundry project and chat model deployment** in your
-   approved region. The deployment script creates neither. Hosted/code deployment
-   availability, subscription quota, service terms, and preview-package approval
-   must be checked for that region. The hosting package is explicitly pinned to a
-   preview release; this is a deployment starter, not a production certification.
-3. Have permission to create the backend resources and assign its ACR pull role,
-   plus Foundry Project Manager permissions for agent deployment. Confirm each
-   hosted agent identity can use the selected model under your project's
-   documented inference permissions. Project membership alone is not a substitute
-   for verifying the identity used at runtime.
-4. Create an Entra application/service principal for the backend API in the same
-   tenant. Expose a dedicated API scope/resource URI and set
-   `api.requestedAccessTokenVersion` to **2**. Supply the application's client ID
-   as `ApiAudience` and its token scope, for example
-   `api://<application-client-id>/.default`, as `BackendScope`. Configure required
-   consent/application permissions with your tenant administrator. Management API
-   tokens such as `https://management.azure.com/` are not backend API credentials.
-5. Know the operator/coordinator's Entra **object ID**. The runner needs explicit
-   read access to backend receipts and permission to invoke all seven Foundry
-   endpoints. Agent stage permissions use each hosted agent's **service-principal
-   object ID**, not a client/application ID and not the Foundry project identity.
-6. Approve upload/data residency and Azure spend. Seven hosted agents, an always-on
-   backend, PostgreSQL, ACR, Azure Files, networking, and logging are billable.
-   Source metadata is stored in PostgreSQL and the local report; model-call
-   inputs contain run configuration, not raw source bytes.
-
-Official references:
-[framework hosting](https://learn.microsoft.com/azure/foundry/how-to/develop/framework-hosted-agents),
-[azure.yaml](https://learn.microsoft.com/azure/foundry/agents/concepts/azure-yaml-reference),
-[hosted identity/token service](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-token-service),
-and [hosted agent permissions](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions).
-
-## 1. Review the infrastructure plan
-
-Run from the repository root. Replace the placeholders with approved values.
-An existing Foundry project may be in a different resource group from the new
-backend. `FoundryLocation` must match the existing project.
+From the repository root, replace placeholders with approved values:
 
 ```powershell
-# Keep operator-specific files out of git; *.local.json is ignored.
-@('<operator-object-id>') | ConvertTo-Json -AsArray |
-    Set-Content .\readers.local.json
-
 $deployment = @{
     SubscriptionId        = '<subscription-guid>'
     TenantId              = '<tenant-guid>'
@@ -105,288 +77,169 @@ $deployment = @{
     Location              = '<backend-region>'
     NamePrefix            = 'osduexplore'
     EnvironmentName       = 'osdu-dev'
-    FoundryProjectId      = '/subscriptions/<subscription-guid>/resourceGroups/<foundry-rg>/providers/Microsoft.CognitiveServices/accounts/<account>/projects/<project>'
+    FoundryProjectId      = '/subscriptions/<guid>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<account>/projects/<project>'
     FoundryProjectEndpoint = 'https://<account>.services.ai.azure.com/api/projects/<project>'
     FoundryLocation       = '<foundry-region>'
-    ModelDeploymentName   = '<existing-chat-model-deployment>'
-    ApiAudience           = '<backend-api-application-client-id>'
-    BackendScope          = 'api://<backend-api-application-client-id>/.default'
-    ReaderPrincipalsPath  = '.\readers.local.json'
-    MaxFiles              = 100
+    ModelDeploymentName   = '<existing-model-deployment>'
+    ApiAudience           = '<backend-api-application-client-guid>'
+    BackendScope          = 'api://<backend-api-application-client-guid>/.default'
 }
 
-# Offline plan: no Azure calls, provisioning, builds, or model invocations.
+# Offline plan: no provisioning, source upload, or model calls.
 .\scripts\deploy_foundry.ps1 @deployment
 
-# Also exercise the explicit execution path without applying it.
-.\scripts\deploy_foundry.ps1 @deployment -Deploy -WhatIf
+# Select independent services rather than deploying every agent.
+.\scripts\deploy_foundry.ps1 @deployment -ServiceNames extract-metadata,classify-data
+
+# Only after approving the plan and costs:
+$password = Read-Host 'PostgreSQL password' -AsSecureString
+.\scripts\deploy_foundry.ps1 @deployment -Deploy -PostgresPassword $password
 ```
 
-The templates create a VNet, delegated PostgreSQL subnet/private DNS, Container
-Apps environment, Log Analytics, managed identity, ACR with admin disabled, and
-an Azure Files share. PostgreSQL is private. Storage network rules permit the
-backend subnet and, optionally, one approved upload IP using `-UploadIpAddress`.
-An omitted upload IP means uploads require another approved network path.
+`-WhatIf` prevents cloud changes. The default selection is the seven specialists;
+the supervisor is opt-in. Deployment checks the HTTPS `/healthz` endpoint before
+deploying agents, builds `mcp_servers\host\Dockerfile`, and packages selected source
+directories. It does not create a model, upload sources, or invoke agents.
 
-The backend exposes HTTPS with token validation and exact principal allowlists;
-this is not an end-to-end private Foundry network topology. A private Foundry
-project needs an approved operator connectivity path and outbound access to the
-backend. Designing private hosted-agent networking is a separate infrastructure
-decision; it cannot be enabled arbitrarily on an existing Foundry account.
+`deployment\azure.yaml` declares a different `project` directory for every
+specialist. `scripts\package_foundry.ps1` copies the shared helper into each
+selected source before remote build and marks generated copies for safe cleanup.
+It never overwrites an existing package directory. Generated packages are ignored
+by git and removed by the deployment script's `finally` cleanup.
 
-Use separate Foundry projects for separate environments. The seven agent names
-in `azure.yaml` are fixed; redeploying them into the same project creates new
-versions of those agents rather than an isolated environment.
-
-## 2. Provision the backend and deploy the seven agents
+For a manual `azd` deployment, package the selected service first, run the normal
+deployment from `deployment`, then clean it explicitly:
 
 ```powershell
-# Supply the same approved password for a repeat infrastructure deployment.
-# Do not put a literal password in command history, files, or source control.
-$password = Read-Host 'PostgreSQL administrator password' -AsSecureString
-.\scripts\deploy_foundry.ps1 @deployment -PostgresPassword $password -Deploy
+.\scripts\package_foundry.ps1 -ServiceNames extract-metadata
+# Use your configured deployment\azure.yaml azd environment.
+.\scripts\package_foundry.ps1 -ServiceNames extract-metadata -Clean
 ```
 
-The script checks tenant/project/model configuration, provisions the backend
-foundation, builds `agents\backend\Dockerfile` remotely in ACR, creates the
-Container App, adopts the existing Foundry project, and deploys each agent
-independently with `azd`. It reports the backend URL and resource/share names.
-It does **not** upload source data or make model calls.
+Use separate Foundry projects for isolated environments. Redeploying a service
+into the same project creates a new version of that agent.
 
-PostgreSQL's connection URL is a Container Apps secret reference. Temporary
-secure deployment parameters are removed on success/failure; infrastructure
-outputs do not include passwords or storage keys. Do not enable verbose CLI
-debug tracing when dealing with deployment secrets. Protect administrator
-credentials and use a separately provisioned least-privilege database role for
-production; the starter backend currently uses the supplied database account.
+## Configure actual agent identities and sources
 
-Bootstrap deploys an **empty agent allowlist** unless a verified mapping is
-supplied. All stage calls fail closed until the next section is completed.
-The endpoint can be healthy while no agent has permission to use it.
+Bootstrap denies specialist execution and receipt reads until identities are
+explicitly configured. Obtain the **actual hosted-agent service-principal object
+IDs** through the documented Foundry/Entra identity readback. Do not guess JSON
+property paths or substitute application/client IDs or the project identity.
 
-## 3. Authorize the actual hosted agent identities
-
-Inspect the deployed services in the Foundry portal and Entra Agent ID, or use
-the current Azure SDK/CLI's documented identity readback. For example:
-
-```powershell
-Push-Location .\agents
-azd ai agent show approve-workspace --output json
-azd ai agent show extract-metadata --output json
-Pop-Location
-```
-
-Verify each service's **runtime principal object ID**. No identity JSON property
-path is guessed by the automation. Create `agent-principals.local.json` with
-seven distinct verified principal IDs:
+Create ignored operator files with the following shapes:
 
 ```json
 {
-  "<approve-workspace-principal-object-id>": 1,
-  "<discover-formats-principal-object-id>": 2,
-  "<extract-metadata-principal-object-id>": 3,
-  "<classify-data-principal-object-id>": 4,
-  "<account-failures-principal-object-id>": 5,
-  "<persist-inventory-principal-object-id>": 6,
-  "<review-inventory-principal-object-id>": 7
+  "<approve-workspace-object-id>": 1,
+  "<discover-formats-object-id>": 2,
+  "<extract-metadata-object-id>": 3,
+  "<classify-data-object-id>": 4,
+  "<account-failures-object-id>": 5,
+  "<persist-inventory-object-id>": 6,
+  "<review-inventory-object-id>": 7
 }
 ```
 
-Grant any required backend API permission/consent to those identities through
-your tenant's approved process, then update only the backend allowlist:
+`reader-principals.local.json` is an array of actual operator/coordinator object
+IDs. A hosted supervisor must also be an explicitly authorized reader and have
+permission to invoke specialist Responses endpoints. It receives no specialist
+MCP role and cannot call their deterministic operations directly.
+For selected standalone services, supply only their verified role/identity subset;
+unrelated agents do not need to be deployed. Empty mappings remain deny-all.
 
 ```powershell
-$access = @{
-    SubscriptionId     = $deployment.SubscriptionId
-    TenantId           = $deployment.TenantId
-    ResourceGroupName  = $deployment.ResourceGroupName
-    ContainerAppName   = '<backend-app-name-reported-by-deployment>'
-    AgentPrincipalsPath = '.\agent-principals.local.json'
-}
-.\scripts\configure_foundry_access.ps1 @access
-.\scripts\configure_foundry_access.ps1 @access -Deploy
+.\scripts\configure_foundry_access.ps1 `
+  -SubscriptionId $deployment.SubscriptionId -TenantId $deployment.TenantId `
+  -ResourceGroupName $deployment.ResourceGroupName -ContainerAppName '<actual-app-name>' `
+  -AgentPrincipalsPath .\agent-principals.local.json `
+  -ReaderPrincipalsPath .\reader-principals.local.json
+# Add -Deploy after reviewing the offline plan.
 ```
 
-The backend validates RS256 signatures, expiry, issuer, tenant, audience, and the
-explicit principal-stage mapping. No anonymous stage access, project-identity
-fallback, shared bearer token, or human-review impersonation is available.
-This configuration update restarts the backend: do it **before starting a run**.
-Reverify identities/permissions after agent redeployment or identity rotation.
+Access updates restart the backend revision. Complete/persist active work first:
+unpersisted filesystem capabilities cannot survive a restart.
 
-## 4. Upload an approved source copy
+Upload an approved source copy into the Azure Files share's `Data` directory
+through a separately approved network path. Upload is deliberately not automated.
+The cloud workspace is `/mnt/source`, not `C:\OSDU\NewSurvey` or the Copilot
+repository workspace. Sources remain read-only; do not change them during
+observation/extraction, and do not upload links as substitutes for files.
 
-Using Azure Storage Explorer or your approved upload process, place this layout
-in the reported `source` share:
+## Invoke one agent independently
 
-```text
-source share
-  Data
-    seismic.sgy
-    well.las
-    navigation.p190
-    measurements.csv
-    unknown.vendor
-```
-
-The cloud approved workspace is `/mnt/source` and discovery is restricted to
-`Data`. `C:\OSDU\NewSurvey` remains your local folder; it is **not** a Foundry
-workspace and cannot be passed to the cloud agents. Upload is a separate,
-explicit data-movement operation. Do not alter uploaded files while a run is
-active, and do not upload links/junctions as substitutes for source files.
-The backend verifies the mounted filesystem is actually read-only at startup.
-The hosted agent identities receive no storage-account write key or source
-write permission.
-
-## 5. Capture endpoints and run the complete workflow
-
-Retrieve each service's full **Responses protocol endpoint**, preserving its
-query string. Do not use the project endpoint in place of an agent endpoint.
-
-```powershell
-Push-Location .\agents
-azd ai agent endpoint show approve-workspace --output json
-azd ai agent endpoint show discover-formats --output json
-# Repeat for the other five service names in the table.
-Pop-Location
-```
-
-Save these values in `agent-endpoints.local.json`:
-
-```json
-{
-  "approve-workspace": "https://<full-responses-endpoint-for-stage-1>",
-  "discover-formats": "https://<full-responses-endpoint-for-stage-2>",
-  "extract-metadata": "https://<full-responses-endpoint-for-stage-3>",
-  "classify-data": "https://<full-responses-endpoint-for-stage-4>",
-  "account-failures": "https://<full-responses-endpoint-for-stage-5>",
-  "persist-inventory": "https://<full-responses-endpoint-for-stage-6>",
-  "review-inventory": "https://<full-responses-endpoint-for-stage-7>"
-}
-```
-
-Install agent/runner dependencies in a **separate environment**, not the local
-core's locked environment:
+The independent invocation CLI needs only Azure identity and HTTP dependencies:
 
 ```powershell
 uv venv .\agents\.venv --python 3.13
-uv pip install --python .\agents\.venv\Scripts\python.exe -r .\agents\requirements.txt
+uv pip install --python .\agents\.venv\Scripts\python.exe `
+  -r .\agents\invocation-requirements.txt
 
-$pipeline = @(
-    '.\agents\run_pipeline.py',
-    '--endpoints', '.\agent-endpoints.local.json',
-    '--backend-url', 'https://<backend-hostname>',
-    '--backend-scope', $deployment.BackendScope,
-    '--max-files', '100',
-    '--output', '.\reports\survey-inventory.local.json'
+# Use a real file_id returned by discovery/detection on this MCP host.
+@{ file_id = '<observed-file-UUID>' } |
+  ConvertTo-Json | Set-Content .\extract-task.local.json
+
+$invoke = @(
+  '.\agents\invoke.py',
+  '--agent', 'extract-metadata',
+  '--operation', 'extract_detected_metadata',
+  '--arguments', '.\extract-task.local.json',
+  '--endpoint', 'https://<actual-full-extraction-agent-Responses-endpoint>',
+  '--backend-url', 'https://<actual-MCP-backend-host>',
+  '--backend-scope', $deployment.BackendScope,
+  '--output', '.\extraction-result.local.json'
 )
-
-# Plan only; no tokens, model calls, inventory changes, or report writes.
-& .\agents\.venv\Scripts\python.exe @pipeline
-
-# Explicitly authorize the seven model invocations and PostgreSQL inventory write.
-& .\agents\.venv\Scripts\python.exe @pipeline --execute
+& .\agents\.venv\Scripts\python.exe @invoke             # Offline plan.
+& .\agents\.venv\Scripts\python.exe @invoke --execute   # Explicit model call.
 ```
 
-Keep the report outside the source directory. The launcher prints the `run_id`
-and client-allocated `inventory_id` before invocation. A new inventory starts
-with expected version zero, per the existing persistence contract; all observed
-identifiers, fingerprints, extraction references, and persisted versions come
-from deterministic tools.
+The caller needs reader access to verify `/operations/{request_id}`. The CLI
+does not trust the model's completion claim. It verifies the operation, arguments,
+request ID and terminal status against the backend receipt.
 
-For a later run of the **same source**, add `--inventory-id <previous-inventory-id>`;
-the launcher reads its current version from the backend. Stable file identities
-cannot be reassigned to an unrelated inventory. Changed files at the same path
-replace their prior inventory entries under the expected-version guard, without
-changing source files. Other existing inventory entries are not silently removed.
+For workspace registration use operation `register_source_workspace` with `{}`.
+For discovery use `discover_source_files` with `{"max_files":100}`. For review use
+`review_persisted_inventory` with an actual inventory ID and page bounds.
+Persistence additionally requires `--allow-inventory-writes`; a null inventory
+ID requests a server-allocated new ID. Existing inventories require an observed
+`expected_state_version`, not an invented value.
 
-To continue an interrupted launcher while the backend instance is unchanged,
-use `--run-id <original-run-id> --inventory-id <original-inventory-id>` and a new
-output filename. The launcher reads the original immutable run configuration and
-skips already-confirmed stages. It does not trust or parse the LLM's completion
-text as a handoff.
+## Run one specialist locally
 
-The final JSON contains every review page, actual metadata payloads and extraction
-references, classification/confidence/trust, evidence, provenance, and per-file
-warnings. Unsupported formats and parser failures stay visible. A `completed`
-pipeline is **not** schema validation, human approval, or OSDU ingestion; all
-review items explicitly require human review.
-
-## Bounds, restart behavior, and extension points
-
-- Discovery is capped by the operator's `OSDU_MAX_FILES` (100 by default), with
-  a 1 TiB aggregate source-size ceiling. Exceeding discovery limits stops the run,
-  rather than silently increasing them. Approve budget changes separately.
-- Detection reads one 65,536-byte prefix per file. Extension-only evidence and
-  near-tied candidates (confidence gap below 0.05) are retained for review, not
-  guessed/extracted. Some valid extensionless or weak-signature formats therefore
-  require improved deterministic detectors, not prompt overrides.
-- Registered extractors retain their own bounded parsing options. The existing
-  extraction contract also computes a complete SHA-256, which can read the entire
-  source file even though sampling/parsing are bounded. Plan I/O accordingly.
-- Extraction/classification failures are handled independently per file. Database,
-  authorization, workspace, ordering, and backend-lifecycle failures stop the run.
-  Run state and failure evidence are durable in PostgreSQL. The inventory mutation
-  is retained with the run as well as being applied through `persist_inventory`,
-  preserving evidence/provenance that the core review projection does not show.
-- Classification currently uses the registry's controlled filename/format rules;
-  extraction references are linked accurately, but parsed metadata does not yet
-  override those rules. Unknown/conflicting values require review, and a suggested
-  OSDU kind is not proof of schema validity.
-- Keep the backend at **one replica, one worker, one unfinished run**. Parser
-  capabilities and observed references are process-local. PostgreSQL does not make
-  them distributed. Do not deploy/update access or change mounts during a run.
-  After a backend restart before stage 6 completes, start a new run and read the
-  actual inventory version; old capabilities are never silently reused. A
-  persisted run can still complete stage 7 after restart, because review reads
-  PostgreSQL rather than reopening source files.
-- Inventory commit and run-receipt updates are separate database transactions.
-  On an interrupted commit, inspect the actual inventory version before starting
-  a new run; do not assume zero or blindly retry a blocked run.
-- Add formats through the existing
-  [data-type extension architecture](../docs/extending-data-types.md). Detection,
-  extraction routing, and classification reuse the injected registry. A genuinely
-  new registered tool ID additionally needs a deliberate stage-capability change.
-  No dynamic code loading or package installation is exposed to agents.
-
-## Local checks and operations
+Install that specialist's own requirements into a dedicated environment and
+configure `FOUNDRY_PROJECT_ENDPOINT`, `AZURE_AI_MODEL_DEPLOYMENT_NAME`,
+`OSDU_BACKEND_URL` and `OSDU_BACKEND_SCOPE`. Then run its entry point:
 
 ```powershell
-# Dependency-free orchestration/config tests; JWT tests require backend deps.
-# The real-tool integration test runs when the root project is installed.
-python -m unittest discover -s agents\tests -v
-
-# Install optional backend dependencies and the core into the separate agent
-# environment to include real registry/persistence and JWT integration.
-uv pip install --python .\agents\.venv\Scripts\python.exe . -r .\agents\backend\requirements.txt
-& .\agents\.venv\Scripts\python.exe -m unittest discover -s agents\tests -v
-
-# Existing project integration, formatting, and typing gates.
-uv sync --frozen
-uv run pytest --no-cov tests\integration\test_data_type_extensions.py tests\unit\test_database_backends.py agents\tests
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy
-
-# Bicep/PowerShell checks and mocked cloud automation: no provisioning.
-.\agents\infra\validate_local.ps1
+uv pip install --python .\agents\.venv\Scripts\python.exe `
+  -r .\agents\extract-metadata\requirements.txt
+& .\agents\.venv\Scripts\python.exe .\agents\extract-metadata\main.py
 ```
 
-Use backend `/healthz` for process readiness; it deliberately exposes no source
-details and does not prove any agent is authorized. A useful smoke run is a
-small CSV plus one unsupported file, using the launcher only after approving
-model spend. Check the persisted metadata, unsupported-file warning, inventory
-version, and unchanged source bytes, not just an agent's text response.
+This starts a local Responses host (port 8088); it still uses the configured
+Foundry model and authenticated MCP backend. Local testing is not offline model
+execution. Each agent can be run this way without starting the supervisor.
 
-Monitor latency/failures without logging raw samples, metadata, or bearer tokens.
-Set PostgreSQL backup/retention, storage lifecycle, least-privilege database
-credentials, ingress rate limits/WAF controls, package locking/image scanning,
-cost alerts, and a tested recovery
-procedure before production use. Initial tables are created by the runtime;
-existing database schema upgrades require a reviewed migration, not
-`create_all` as a migration strategy.
+## Verification and migration
 
-Cleanup is deliberately **not automatic**: first stop invocations, retain/export
-the inventory and source copy as required, then remove the seven hosted agent
-deployments and explicitly delete the dedicated backend resource group only
-after confirming its contents. The existing Foundry project/model may be shared
-and are not owned by these backend templates.
+```powershell
+python -m unittest discover -s agents\tests -v
+.\deployment\infra\validate_local.ps1
+uv run ruff check .
+uv run ruff format --check .
+```
+
+The real MCP/core integration test runs when root dependencies are installed.
+Full SDK hosting, cloud identity and deployed invocation must also be checked in
+your approved environment; offline checks are not proof of a live deployment.
+
+The old `/stages/*` API, shared agent entry point, and `run_pipeline.py` are removed.
+Existing inventory data is retained. Old run-ledger records are historical, not
+resumable swarm sessions. New invocations use independent operation receipts.
+No source-writing, manifest generation, OSDU ingestion or human approval
+capabilities are exposed by these MCP servers.
+
+Official references:
+[Agent Framework hosting](https://learn.microsoft.com/azure/foundry/how-to/develop/framework-hosted-agents),
+[Foundry manifest](https://learn.microsoft.com/azure/foundry/agents/concepts/azure-yaml-reference),
+[hosted identity](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-token-service),
+[MCP client lifecycle](https://py.sdk.modelcontextprotocol.io/client/transports/).

@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from osdu_cloud.settings import Settings, principal_map
+from mcp_servers.host.settings import Settings, principal_map
 
 
 class PolicySettingsTests(unittest.TestCase):
@@ -59,7 +59,7 @@ class EntraAuthenticationTests(unittest.TestCase):
     def setUp(self):
         import jwt
         from cryptography.hazmat.primitives.asymmetric import rsa
-        from osdu_cloud.auth import AccessDenied, EntraAuthenticator
+        from mcp_servers.host.auth import AccessDenied, EntraAuthenticator
 
         self.jwt = jwt
         self.denied = AccessDenied
@@ -99,10 +99,10 @@ class EntraAuthenticationTests(unittest.TestCase):
         claims = self.claims | overrides
         return "Bearer " + self.jwt.encode(claims, self.private_key, algorithm="RS256")
 
-    def test_valid_token_binds_the_exact_stage_not_the_claimed_actor(self):
+    def test_valid_token_binds_the_exact_capability_role_not_the_claimed_actor(self):
         caller = self.auth.authenticate(self.token())
         assert caller.principal_id == self.principal
-        assert caller.stage == 6
+        assert caller.role == 6
         assert not caller.reader
 
     def test_wrong_audience_tenant_expiry_and_unknown_principal_are_denied(self):

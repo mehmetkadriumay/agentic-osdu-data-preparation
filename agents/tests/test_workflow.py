@@ -1,32 +1,42 @@
+import asyncio
 import copy
+import importlib.util
 import sys
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from osdu_cloud.workflow import RunRequest, Workflow, WorkflowError
-from osdu_foundry.stages import STAGES, get_stage
+from mcp_servers.shared.service import OperationError, OperationService
 
 
 class MemoryLedger:
     def __init__(self):
         self.rows = {}
 
-    def get(self, run_id):
-        return copy.deepcopy(self.rows.get(run_id))
+    def get(self, request_id):
+        return copy.deepcopy(self.rows.get(request_id))
 
-    def save(self, state):
-        self.rows[state["request"]["run_id"]] = copy.deepcopy(state)
+    def save(self, receipt):
+        self.rows[receipt["request_id"]] = copy.deepcopy(receipt)
 
-    def has_active(self, instance_id):
-        return any(
-            row["instance_id"] == instance_id
-            and row["completed_stage"] < 6
-            and row["status"] != "blocked"
+    def inventory_receipt(self, inventory_id):
+        rows = [
+            row
             for row in self.rows.values()
+            if row["operation"] == "persist_observed_inventory"
+            and row["status"] == "succeeded"
+            and row["result"]["inventory_id"] == inventory_id
+        ]
+        return (
+            copy.deepcopy(max(rows, key=lambda row: row["result"]["output"]["state_version"]))
+            if rows
+            else None
         )
 
 
@@ -37,23 +47,24 @@ class FakeGateway:
         self.fail_extract = set()
         self.extension_only = False
         self.ambiguous = False
-        self.review_size = 1
+        self.extraction_hook = lambda: None
+        self.committed = threading.Event()
 
     def call(self, tool_id, request_id, workspace_id, actor, value):
-        self.calls.append((tool_id, value, request_id, actor))
+        self.calls.append((tool_id, value))
         evidence = []
         if tool_id == "TOOL-001":
             output = {
                 "workspace_id": str(uuid4()),
                 "canonical_root": "/mnt/source",
-                "policy_fingerprint": "a" * 64,
                 "read_only": True,
+                "policy_fingerprint": "a" * 64,
             }
         elif tool_id == "TOOL-002":
             output = {
                 "files": [
-                    {"file_id": file_id, "relative_path": f"Data/{index}.csv", "size_bytes": 100}
-                    for index, file_id in enumerate(self.file_ids)
+                    {"file_id": file_id, "relative_path": f"Data/{i}.csv"}
+                    for i, file_id in enumerate(self.file_ids)
                 ]
             }
         elif tool_id == "TOOL-003":
@@ -61,31 +72,30 @@ class FakeGateway:
         elif tool_id == "TOOL-004":
             candidates = [{"format_id": "CSV", "confidence": 0.9, "evidence_ids": ["proof"]}]
             if self.ambiguous:
-                candidates.append({"format_id": "TEXT", "confidence": 0.89, "evidence_ids": []})
+                candidates.append({"format_id": "TEXT", "confidence": 0.89})
+            output = {"detection": {"file_id": value["file_id"], "candidates": candidates}}
             evidence = [
                 {
                     "evidence_id": "proof",
-                    "rule_id": "FORMAT-1.EXT-CSV" if self.extension_only else "FORMAT-1.SIG-CSV",
+                    "rule_id": "FORMAT.EXT-CSV" if self.extension_only else "FORMAT.SIG-CSV",
                 }
             ]
-            output = {"detection": {"file_id": value["file_id"], "candidates": candidates}}
         elif tool_id == "TOOL-011":
+            self.extraction_hook()
             if value["file_id"] in self.fail_extract:
-                raise WorkflowError("EXTRACTION_FAILED")
-            output = {"columns": ["X", "Y"], "row_count": 1}
+                raise OperationError("EXTRACTION_FAILED")
+            output = {"row_count": 2}
         elif tool_id == "TOOL-005":
-            output = {
-                "classification": {"file_id": value["file_id"], "extraction_ids": ["real-ref"]}
-            }
+            output = {"classification": {"file_id": value["file_id"], "extraction_ids": ["real"]}}
         elif tool_id == "TOOL-022":
+            self.committed.set()
             output = {"state_version": value["expected_state_version"] + 1}
         elif tool_id == "TOOL-027":
-            offset = value["query"]["offset"]
-            ids = self.file_ids[offset : offset + self.review_size]
+            ids = self.file_ids[value["query"]["offset"] :][: value["query"]["limit"]]
             output = {
+                "items": [{"file": {"file_id": file_id}} for file_id in ids],
                 "state_version": 1,
                 "total_count": len(self.file_ids),
-                "items": [{"file": {"file_id": file_id}} for file_id in ids],
             }
         else:
             raise AssertionError(tool_id)
@@ -95,107 +105,263 @@ class FakeGateway:
         return "TOOL-011", {"file_id": file_id}
 
     def classification(self, file_id):
-        return {"file_id": file_id, "extracted_metadata": ["authoritative-reference"]}
+        return {"file_id": file_id, "extracted_metadata": ["authoritative"]}
 
-    def snapshot(self, state):
-        return {"files": list(state["files"]), "extracted_metadata": ["authoritative-metadata"]}
+    def snapshot(self, inventory_id, files):
+        return {
+            "files": list(files),
+            "extracted_metadata": ["authoritative"],
+            "evidence": [
+                {
+                    "evidence_id": str(uuid4()),
+                    "evidence_type": "operation_failure",
+                    "source_file_id": file_id,
+                    "observed_value": warning["code"],
+                }
+                for file_id, item in files.items()
+                for warning in item["warnings"]
+            ],
+        }
 
     def review_records(self, inventory_id, file_ids):
         return {
-            file_id: {
-                "detection": {"file_id": file_id},
-                "detected_formats": ["CSV"],
-                "extracted_metadata": [{"reference": "real-ref", "payload": {"row_count": 1}}],
-            }
+            file_id: {"extracted_metadata": [{"reference": "real", "row_count": 2}]}
             for file_id in file_ids
         }
 
 
-class WorkflowTests(unittest.TestCase):
+class OperationTests(unittest.TestCase):
     def setUp(self):
         self.gateway = FakeGateway()
         self.ledger = MemoryLedger()
-        self.workflow = Workflow(self.gateway, self.ledger, "/mnt/source", "Data")
-        self.request = RunRequest(str(uuid4()), str(uuid4()), max_files=10)
+        self.service = OperationService(self.gateway, self.ledger, "/mnt/source")
 
-    def advance(self, through=7):
-        result = None
-        for stage in range(1, through + 1):
-            result = self.workflow.execute(stage, self.request, f"principal-{stage}")
-        return result
+    def call(self, operation, role, **arguments):
+        return self.service.execute(operation, str(uuid4()), arguments, f"principal-{role}", role)
 
-    def test_pipeline_keeps_failures_and_real_metadata_and_paginates(self):
-        self.gateway.fail_extract.add(self.gateway.file_ids[0])
-        result = self.advance()
-        assert result["completed_stage"] == 7
-        assert result["status"] == "needs_review"
-        assert result["counts"]["files"] == 2
-        assert result["counts"]["extracted"] == 1
-        assert result["failures"][0]["code"] == "EXTRACTION_FAILED"
-        assert len([call for call in self.gateway.calls if call[0] == "TOOL-027"]) == 2
-        state = self.ledger.get(self.request.run_id)
-        assert state["inventory_mutation"]["extracted_metadata"] == ["authoritative-metadata"]
-        assert state["review_items"][1]["extracted_metadata"][0]["reference"] == "real-ref"
-        assert "untrusted" not in repr(state)
+    def discover(self):
+        self.call("register_source_workspace", 1)
+        self.call("discover_source_files", 2)
+        for file_id in self.gateway.file_ids:
+            self.call("inspect_file_format", 2, file_id=file_id)
+
+    def test_capabilities_are_independent_not_ordered_global_stages(self):
+        self.discover()
+        file_id = self.gateway.file_ids[0]
+        # Classification may explicitly operate on detection alone, without another file's work.
+        result = self.call("classify_observed_file", 4, file_id=file_id)
+        assert result["status"] == "succeeded"
+        assert "completed_stage" not in result
+        assert self.call("extract_detected_metadata", 3, file_id=file_id)["status"] == "succeeded"
+        assert all(call[1].get("root_path") != "C:\\other" for call in self.gateway.calls)
         registration = self.gateway.calls[0][1]
         assert registration["read_only"]
         assert registration["allowed_output_subpaths"] == []
-        discovery = next(call[1] for call in self.gateway.calls if call[0] == "TOOL-002")
+        discovery = next(value for tool, value in self.gateway.calls if tool == "TOOL-002")
         assert discovery["include_paths"] == ["Data"]
         assert not discovery["follow_symlinks"]
+        assert "untrusted" not in repr(self.service.files)
 
-    def test_extension_only_and_ambiguous_files_are_not_extracted(self):
-        for kind in ("extension_only", "ambiguous"):
-            with self.subTest(kind=kind):
-                self.setUp()
-                setattr(self.gateway, kind, True)
-                result = self.advance()
-                assert result["counts"]["extracted"] == 0
-                assert result["counts"]["classified"] == 0
-                assert result["counts"]["files"] == 2
-                assert not any(call[0] == "TOOL-011" for call in self.gateway.calls)
+    def test_different_files_extract_concurrently(self):
+        self.discover()
+        barrier = threading.Barrier(2)
+        self.gateway.extraction_hook = lambda: barrier.wait(timeout=3)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(self.call, "extract_detected_metadata", 3, file_id=file_id)
+                for file_id in self.gateway.file_ids
+            ]
+            assert all(future.result(timeout=5)["status"] == "succeeded" for future in futures)
 
-    def test_order_and_configuration_are_enforced_and_stages_are_idempotent(self):
-        with self.assertRaisesRegex(WorkflowError, "WORKSPACE_STAGE_REQUIRED"):
-            self.workflow.execute(2, self.request, "actor")
-        self.advance(1)
-        calls = len(self.gateway.calls)
-        self.workflow.execute(1, self.request, "actor")
-        assert len(self.gateway.calls) == calls
-        with self.assertRaisesRegex(WorkflowError, "PRECEDING_STAGE_REQUIRED"):
-            self.workflow.execute(3, self.request, "actor")
-        altered = RunRequest(self.request.run_id, self.request.inventory_id, max_files=11)
-        with self.assertRaisesRegex(WorkflowError, "RUN_CONFIGURATION_CONFLICT"):
-            self.workflow.execute(2, altered, "actor")
-        with self.assertRaisesRegex(WorkflowError, "ANOTHER_RUN_IS_ACTIVE"):
-            self.workflow.execute(1, RunRequest(str(uuid4()), str(uuid4())), "actor")
+    def test_commit_waits_for_active_extraction_and_preserves_failures(self):
+        self.discover()
+        started, release = threading.Event(), threading.Event()
 
-    def test_backend_restart_blocks_unpersisted_work_but_allows_review(self):
-        self.advance(1)
-        restarted = Workflow(self.gateway, self.ledger, "/mnt/source", "Data")
-        with self.assertRaisesRegex(WorkflowError, "BACKEND_RESTART_REQUIRES_NEW_RUN"):
-            restarted.execute(2, self.request, "actor")
-        self.advance(6)
-        assert restarted.execute(7, self.request, "actor")["completed_stage"] == 7
+        def hold():
+            started.set()
+            if not release.wait(timeout=3):
+                raise RuntimeError("Test extraction did not release")
 
-    def test_stage_capabilities_do_not_include_manifest_or_ingestion_tools(self):
-        capabilities = set().union(*(stage.tool_ids for stage in STAGES))
-        assert not capabilities.intersection({f"TOOL-{number:03}" for number in range(14, 22)})
-        assert not capabilities.intersection({"TOOL-029", "TOOL-030"})
-        with self.assertRaises(ValueError):
-            get_stage(True)
+        self.gateway.extraction_hook = hold
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            extraction = pool.submit(
+                self.call,
+                "extract_detected_metadata",
+                3,
+                file_id=self.gateway.file_ids[0],
+            )
+            assert started.wait(timeout=2)
+            commit = pool.submit(
+                self.call, "persist_observed_inventory", 6, file_ids=self.gateway.file_ids
+            )
+            try:
+                assert not self.gateway.committed.wait(timeout=0.05)
+            finally:
+                release.set()
+            assert extraction.result(timeout=5)["status"] == "succeeded"
+            receipt = commit.result(timeout=5)
+        assert receipt["status"] == "succeeded"
+        assert receipt["result"]["snapshot"]["extracted_metadata"] == ["authoritative"]
+        assert receipt["result"]["snapshot"]["evidence"]
 
-    def test_request_rejects_scope_injection_and_invalid_budgets(self):
-        for changes in (
-            {"root_path": "C:\\other"},
-            {"max_files": True},
-            {"max_files": 101},
-            {"expected_state_version": -1},
+    def test_same_file_operations_do_not_overlap(self):
+        self.discover()
+        active = 0
+        lock = threading.Lock()
+
+        def assert_single():
+            nonlocal active
+            with lock:
+                active += 1
+                assert active == 1
+            threading.Event().wait(0.03)
+            with lock:
+                active -= 1
+
+        self.gateway.extraction_hook = assert_single
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(
+                    self.call, "extract_detected_metadata", 3, file_id=self.gateway.file_ids[0]
+                )
+                for _ in range(2)
+            ]
+            assert all(future.result(timeout=5)["status"] == "succeeded" for future in futures)
+
+    def test_ambiguous_extension_only_and_failed_files_remain_in_inventory(self):
+        for condition, code in (
+            ("ambiguous", "AMBIGUOUS_FORMAT"),
+            ("extension_only", "CONTENT_EVIDENCE_REQUIRED"),
         ):
-            value = {"run_id": self.request.run_id, "inventory_id": self.request.inventory_id}
-            value.update(changes)
-            with self.subTest(changes=changes), self.assertRaises(WorkflowError):
-                RunRequest.from_dict(value, 100)
+            with self.subTest(condition=condition):
+                self.setUp()
+                setattr(self.gateway, condition, True)
+                self.discover()
+                failed = self.call("extract_detected_metadata", 3, file_id=self.gateway.file_ids[0])
+                assert failed["error"]["code"] == code
+                persisted = self.call(
+                    "persist_observed_inventory", 6, file_ids=self.gateway.file_ids
+                )
+                assert persisted["status"] == "succeeded"
+                assert len(persisted["result"]["snapshot"]["files"]) == 2
+                assert not any(tool == "TOOL-011" for tool, _ in self.gateway.calls)
+
+    def test_request_repeats_are_idempotent_and_identity_bound(self):
+        request_id = str(uuid4())
+        receipt = self.service.execute("register_source_workspace", request_id, {}, "p", 1)
+        assert self.service.execute("register_source_workspace", request_id, {}, "p", 1) == receipt
+        assert len(self.gateway.calls) == 1
+        with self.assertRaisesRegex(OperationError, "REQUEST_CONFIGURATION_CONFLICT"):
+            self.service.execute("register_source_workspace", request_id, {}, "other", 1)
+        with self.assertRaisesRegex(OperationError, "CAPABILITY_DENIED"):
+            self.service.execute("register_source_workspace", str(uuid4()), {}, "p", 3)
+        self.ledger.rows[request_id]["status"] = "in_progress"
+        with self.assertRaisesRegex(OperationError, "OPERATION_OUTCOME_UNKNOWN"):
+            self.service.execute("register_source_workspace", request_id, {}, "p", 1)
+
+    def test_restart_allows_independent_review_not_stale_file_capabilities(self):
+        self.discover()
+        persisted = self.call("persist_observed_inventory", 6, file_ids=self.gateway.file_ids)
+        inventory_id = persisted["result"]["inventory_id"]
+        self.service = OperationService(self.gateway, self.ledger, "/mnt/source")
+        reviewed = self.call(
+            "review_persisted_inventory", 7, inventory_id=inventory_id, offset=0, limit=1
+        )
+        assert reviewed["status"] == "succeeded"
+        item = reviewed["result"]["output"]["items"][0]
+        assert item["extracted_metadata"]
+        assert item["warnings"]
+        assert item["human_review_required"]
+        stale = self.call("extract_detected_metadata", 3, file_id=self.gateway.file_ids[0])
+        assert stale["error"]["code"] == "FILE_CAPABILITY_EXPIRED"
+
+    def test_scope_and_version_injections_are_rejected(self):
+        assert (
+            self.call("register_source_workspace", 1, root_path="C:\\other")["error"]["code"]
+            == "OPERATION_INPUT_INVALID"
+        )
+        self.discover()
+        assert (
+            self.call(
+                "persist_observed_inventory",
+                6,
+                file_ids=self.gateway.file_ids,
+                expected_state_version=True,
+            )["error"]["code"]
+            == "STATE_VERSION_INVALID"
+        )
+
+    def test_standalone_legacy_review_flags_missing_receipt_and_metadata(self):
+        self.gateway.review_records = lambda _inventory, _files: {}
+        reviewed = self.call("review_persisted_inventory", 7, inventory_id=str(uuid4()))
+        assert reviewed["status"] == "succeeded"
+        warnings = reviewed["result"]["output"]["items"][0]["warnings"]
+        assert {warning["code"] for warning in warnings} == {
+            "OPERATION_RECEIPT_UNAVAILABLE",
+            "METADATA_UNAVAILABLE",
+        }
+
+
+class AsyncMCPFacadeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mcp_handlers_offload_work_without_losing_verified_identity(self):
+        class StubServer:
+            def __init__(self, **_kwargs):
+                self.functions = {}
+
+            def tool(self):
+                def register(function):
+                    self.functions[function.__name__] = function
+                    return function
+
+                return register
+
+        root = Path(__file__).resolve().parents[2]
+        gateway, ledger = FakeGateway(), MemoryLedger()
+        service = OperationService(gateway, ledger, "/mnt/source")
+        for operation, role, arguments in (
+            ("register_source_workspace", 1, {}),
+            ("discover_source_files", 2, {}),
+            *(("inspect_file_format", 2, {"file_id": file_id}) for file_id in gateway.file_ids),
+        ):
+            receipt = service.execute(operation, str(uuid4()), arguments, "operator", role)
+            assert receipt["status"] == "succeeded"
+        rendezvous = threading.Barrier(2)
+        gateway.extraction_hook = lambda: rendezvous.wait(timeout=2)
+
+        def load(name, path):
+            spec = importlib.util.spec_from_file_location(name, root / path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        sdk, sdk_server = ModuleType("mcp"), ModuleType("mcp.server")
+        sdk_server.MCPServer = StubServer
+        with patch.dict(sys.modules, {"mcp": sdk, "mcp.server": sdk_server}):
+            transport = load(
+                "mcp_servers.shared.test_transport", Path("mcp_servers") / "shared" / "transport.py"
+            )
+            with patch.dict(sys.modules, {"mcp_servers.shared.transport": transport}):
+                factory = load(
+                    "test_extraction_facade", Path("mcp_servers") / "extraction" / "server.py"
+                )
+                server = factory.create_server(service)
+                token = transport.caller_context.set(
+                    SimpleNamespace(principal_id="verified", role=3)
+                )
+                try:
+                    results = await asyncio.gather(
+                        *(
+                            server.functions["extract_detected_metadata"](
+                                request_id=str(uuid4()),
+                                file_id=file_id,
+                            )
+                            for file_id in gateway.file_ids
+                        )
+                    )
+                finally:
+                    transport.caller_context.reset(token)
+        assert all(result["status"] == "succeeded" for result in results)
+        assert all(result["principal_id"] == "verified" for result in results)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,0 @@
-azure-identity==1.27.0
-PyJWT[crypto]==2.15.1
-psycopg[binary]==3.3.9

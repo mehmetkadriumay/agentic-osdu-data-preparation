@@ -61,10 +61,12 @@ closed because signed approval is available only through WF-003.
 
 ## Example: explore and extract a new data source with GitHub Copilot
 
-For **seven independently hosted Microsoft Agent Framework agents on Microsoft
-Foundry**, see [`agents/README.md`](agents/README.md). It includes the shared Azure
-Container Apps runtime, read-only Azure Files source mount, PostgreSQL inventory,
-deployment scripts, identity configuration, and an end-to-end pipeline launcher.
+For **individually callable Microsoft Agent Framework specialists on Microsoft
+Foundry**, see [`agents/README.md`](agents/README.md). Each agent has its own source
+directory, entry point, instructions, and deployment. The four capability-oriented
+MCP servers are defined in [`mcp_servers`](mcp_servers/README.md); dynamic delegation
+and concurrent specialist work live in [`swarms`](swarms/README.md), independently
+of the deterministic data-access code. Infrastructure lives under `deployment`.
 The local Copilot/MCP example below remains unchanged and needs no Azure resources.
 
 Suppose a newly received survey contains these files:

@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=https://aka.ms/azure-dev/v1.0/azure.yaml.json
+name: osdu-exploration-agents
+requiredVersions:
+  azd: ">=1.36.0"
+  extensions:
+    azure.ai.agents: ">=1.0.0-beta.20"
+    azure.ai.projects: ">=1.0.0-beta.14"
+services:
+  ai-project:
+    host: azure.ai.project
+    endpoint: ${AZURE_AI_PROJECT_ENDPOINT}
+  approve-workspace:
+    host: azure.ai.agent
+    project: ../agents/approve-workspace
+    language: docker
+    uses: [ai-project]
+    name: osdu-approve-workspace
+    kind: hosted
+    protocols: [{protocol: responses, version: 2.0.0}]
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+    env:
+      OSDU_BACKEND_URL: ${OSDU_BACKEND_URL}
+      OSDU_BACKEND_SCOPE: ${OSDU_BACKEND_SCOPE}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  discover-formats:
+    host: azure.ai.agent
+    project: ../agents/discover-formats
+    language: docker
+    uses: [ai-project]
+    name: osdu-discover-formats
+    kind: hosted
+    protocols: [{protocol: responses, version: 2.0.0}]
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+    env:
+      OSDU_BACKEND_URL: ${OSDU_BACKEND_URL}
+      OSDU_BACKEND_SCOPE: ${OSDU_BACKEND_SCOPE}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  extract-metadata:
+    host: azure.ai.agent
+    project: ../agents/extract-metadata
+    language: docker
+    uses: [ai-project]
+    name: osdu-extract-metadata
+    kind: hosted
+    protocols: [{protocol: responses, version: 2.0.0}]
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+    env:
+      OSDU_BACKEND_URL: ${OSDU_BACKEND_URL}
+      OSDU_BACKEND_SCOPE: ${OSDU_BACKEND_SCOPE}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  classify-data:
+    host: azure.ai.agent
+    project: ../agents/classify-data
+    language: docker
+    uses: [ai-project]
+    name: osdu-classify-data
+    kind: hosted
+    protocols: [{protocol: responses, version: 2.0.0}]
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+    env:
+      OSDU_BACKEND_URL: ${OSDU_BACKEND_URL}
+      OSDU_BACKEND_SCOPE: ${OSDU_BACKEND_SCOPE}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  account-failures:
+    host: azure.ai.agent
+    project: ../agents/account-failures
+    language: docker
+    uses: [ai-project]
+    name: osdu-account-failures
+    kind: hosted
+    protocols: [{protocol: responses, version: 2.0.0}]
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+    env:
+      OSDU_BACKEND_URL: ${OSDU_BACKEND_URL}
+      OSDU_BACKEND_SCOPE: ${OSDU_BACKEND_SCOPE}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  persist-inventory:
+    host: azure.ai.agent
+    project: ../agents/persist-inventory
+    language: docker
+    uses: [ai-project]
+    name: osdu-persist-inventory
+    kind: hosted
+    protocols: [{protocol: responses, version: 2.0.0}]
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+    env:
+      OSDU_BACKEND_URL: ${OSDU_BACKEND_URL}
+      OSDU_BACKEND_SCOPE: ${OSDU_BACKEND_SCOPE}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  review-inventory:
+    host: azure.ai.agent
+    project: ../agents/review-inventory
+    language: docker
+    uses: [ai-project]
+    name: osdu-review-inventory
+    kind: hosted
+    protocols: [{protocol: responses, version: 2.0.0}]
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+    env:
+      OSDU_BACKEND_URL: ${OSDU_BACKEND_URL}
+      OSDU_BACKEND_SCOPE: ${OSDU_BACKEND_SCOPE}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  exploration-supervisor:
+    host: azure.ai.agent
+    project: ../swarms/exploration
+    language: docker
+    uses: [ai-project]
+    name: osdu-exploration-supervisor
+    kind: hosted
+    protocols: [{protocol: responses, version: 2.0.0}]
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+    env:
+      OSDU_BACKEND_URL: ${OSDU_BACKEND_URL}
+      OSDU_BACKEND_SCOPE: ${OSDU_BACKEND_SCOPE}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+      OSDU_AGENT_ENDPOINTS_JSON: ${OSDU_AGENT_ENDPOINTS_JSON}
+      OSDU_SWARM_CONCURRENCY: ${OSDU_SWARM_CONCURRENCY}
+      OSDU_ALLOW_INVENTORY_WRITES: ${OSDU_ALLOW_INVENTORY_WRITES}

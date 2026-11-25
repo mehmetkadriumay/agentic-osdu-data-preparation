@@ -31,3 +31,6 @@ Thumbs.db
 .azure/
 .foundry/
 *.local.json
+agents/*/osdu_agent_host/
+swarms/*/osdu_agent_host/
+!agents/shared/osdu_agent_host/

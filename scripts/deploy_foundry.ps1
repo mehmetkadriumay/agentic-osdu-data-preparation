@@ -11,11 +11,12 @@ Prerequisites: authenticated az and azd (agents/projects extensions), an existin
 Foundry project/model, and an Entra API app with requestedAccessTokenVersion=2.
 ApiAudience is that app's client GUID, not the Foundry project identity. BackendScope
 is its application URI plus /.default. The application validates tokens itself.
-Provide seven distinct, operator-verified agent service principal object IDs after
+Provide distinct, operator-verified service principal object IDs for the selected
+capability roles (any subset of 1..7) after
 deployment with configure_foundry_access.ps1; bootstrap defaults to deny-all.
 
 PostgresPassword is a SecureString. Deployment parameter files are created beneath
-agents\infra in a current-user-only directory and removed in finally. Never enable
+deployment\infra in a current-user-only directory and removed in finally. Never enable
 native CLI debug logging or transcripts when handling deployment secrets.
 Database credentials are never written to azd environments or printed.
 
@@ -23,14 +24,28 @@ UploadIpAddress optionally permits one public IPv4 address for manual source upl
 to the source share's Data directory; otherwise only the ACA subnet can access it.
 No data is uploaded. Removing an earlier upload IP requires redeployment with ''.
 
-The backend image must run as nonroot UID 10001 (agents\backend\Dockerfile).
+The backend image must run as nonroot UID 10001 (mcp_servers\host\Dockerfile),
+with uvicorn mcp_servers.host.app:create_app as its application factory.
 It is forced to one worker and one replica because caches are not distributed.
 An unauthenticated HTTPS GET /healthz must return 200 within the bounded health
 timeout before agent deployment. Redirects are rejected; tokens and response bodies
 are never logged. Each azd deploy must succeed; no separate agent-state query or
 model invocation is performed. Existing Foundry model inference permissions are
 an operator/platform prerequisite; this script does not grant those permissions.
-Rerunning creates a new backend image and immutable versions of all seven agents.
+Rerunning creates a new backend image and immutable versions of selected services.
+ServiceNames defaults to the seven independent capability agents (role IDs 1..7,
+not a sequential counter). exploration-supervisor is opt-in: supply a JSON object
+of all seven service names to existing HTTPS Responses endpoint strings using
+AgentEndpointsPath. SupervisorPrincipalId, when supplied, must already be
+allowlisted in ReaderPrincipalsPath, never in AgentPrincipalsPath. Bootstrap may
+omit it and readers: receipt reads remain denied until the actual supervisor
+principal is verified and separately configured. No endpoints or IDs are guessed.
+The authored deployment\azure.yaml adopts the existing project using environment
+settings; agent init is not run and the manifest is never overwritten.
+Selected shared helpers are packaged only after approval and cleaned in finally.
+Supervisor persistence is disabled by default. -PermitInventoryWrites explicitly
+sets its immutable operator policy to allow persist-inventory delegation; this
+switch is valid only when exploration-supervisor is among the selected services.
 .EXAMPLE
 $password = Read-Host 'PostgreSQL password' -AsSecureString
 .\scripts\deploy_foundry.ps1 -SubscriptionId '<guid>' -TenantId '<guid>' `
@@ -74,6 +89,15 @@ param(
     [ValidateRange(1, 60)][int] $BackendHealthPollSeconds = 5,
     [string] $AgentPrincipalsPath,
     [string] $ReaderPrincipalsPath,
+    [ValidateNotNullOrEmpty()]
+    [ValidateSet('approve-workspace', 'discover-formats', 'extract-metadata', 'classify-data',
+        'account-failures', 'persist-inventory', 'review-inventory', 'exploration-supervisor')]
+    [string[]] $ServiceNames = @('approve-workspace', 'discover-formats', 'extract-metadata',
+        'classify-data', 'account-failures', 'persist-inventory', 'review-inventory'),
+    [string] $AgentEndpointsPath,
+    [ValidateRange(1, 7)][int] $SwarmConcurrency = 3,
+    [guid] $SupervisorPrincipalId,
+    [switch] $PermitInventoryWrites,
     [switch] $Deploy
 )
 Set-StrictMode -Version Latest
@@ -139,17 +163,16 @@ function Read-Principals {
         return ,$parsed
     }
     if ($parsed -isnot [System.Collections.IDictionary]) { throw 'AgentPrincipalsPath must contain a JSON object.' }
-    $stages = [System.Collections.Generic.HashSet[int]]::new()
+    $roles = [System.Collections.Generic.HashSet[int]]::new()
     $ids = [System.Collections.Generic.HashSet[guid]]::new()
     foreach ($id in $parsed.Keys) {
         $guid = [guid]::Empty
-        $stage = $parsed[$id]
+        $role = $parsed[$id]
         if (-not [guid]::TryParse($id, [ref]$guid) -or $guid -eq [guid]::Empty -or -not $ids.Add($guid) -or
-            $stage -isnot [long] -or $stage -lt 1 -or $stage -gt 7 -or -not $stages.Add([int]$stage)) {
-            throw 'Agent mapping requires distinct object-ID GUID keys and distinct integer stages 1..7.'
+            $role -isnot [long] -or $role -lt 1 -or $role -gt 7 -or -not $roles.Add([int]$role)) {
+            throw 'Agent mapping requires distinct object-ID GUID keys and distinct integer capability role IDs 1..7.'
         }
     }
-    if ($parsed.Count -notin @(0, 7)) { throw 'Supply either an empty bootstrap mapping or all seven verified agent identities.' }
     return $parsed
 }
 
@@ -177,11 +200,47 @@ if ($UploadIpAddress) {
 }
 $agents = Read-Principals -Path $AgentPrincipalsPath
 $readers = Read-Principals -Path $ReaderPrincipalsPath -Readers
+foreach ($reader in $readers) {
+    if (@($agents.Keys | Where-Object { [guid]$_ -eq [guid]$reader }).Count) {
+        throw 'Reader principals must not have specialist tool permissions.'
+    }
+}
+$services = @($ServiceNames | Select-Object -Unique)
+if ($PermitInventoryWrites -and 'exploration-supervisor' -notin $services) {
+    throw '-PermitInventoryWrites applies only to selected exploration-supervisor deployments.'
+}
+$endpointJson = $null
+if ('exploration-supervisor' -in $services) {
+    if (-not $AgentEndpointsPath) { throw 'Supervisor deployment requires AgentEndpointsPath with existing specialist endpoints.' }
+    $endpoints = Get-Content -LiteralPath $AgentEndpointsPath -Raw | ConvertFrom-Json -AsHashtable -NoEnumerate
+    $specialists = @('approve-workspace', 'discover-formats', 'extract-metadata', 'classify-data',
+        'account-failures', 'persist-inventory', 'review-inventory')
+    if ($endpoints -isnot [System.Collections.IDictionary] -or $endpoints.Count -ne 7) {
+        throw 'AgentEndpointsPath must map exactly the seven specialist service names to HTTPS endpoint strings.'
+    }
+    foreach ($service in $specialists) {
+        $uri = $null
+        if (-not $endpoints.Contains($service) -or $endpoints[$service] -isnot [string] -or
+            -not [uri]::TryCreate($endpoints[$service], [UriKind]::Absolute, [ref]$uri) -or
+            $uri.Scheme -ne 'https' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) {
+            throw 'AgentEndpointsPath must map exactly the seven specialist service names to HTTPS endpoint strings without credentials, query, or fragment.'
+        }
+    }
+    if ($PSBoundParameters.ContainsKey('SupervisorPrincipalId') -and
+        ($SupervisorPrincipalId -eq [guid]::Empty -or
+        -not @($readers | Where-Object { [guid]$_ -eq $SupervisorPrincipalId }).Count -or
+        @($agents.Keys | Where-Object { [guid]$_ -eq $SupervisorPrincipalId }).Count)) {
+        throw 'SupervisorPrincipalId must be explicitly allowlisted in ReaderPrincipalsPath with no specialist tool permissions.'
+    }
+    $endpointJson = ConvertTo-Json -InputObject $endpoints -Compress
+}
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$agentRoot = Join-Path $repoRoot 'agents'
-$infraRoot = Join-Path $agentRoot 'infra'
-foreach ($file in @('azure.yaml', 'main.py', 'requirements.txt', 'backend\Dockerfile', 'infra\bootstrap.bicep', 'infra\app.bicep')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $agentRoot $file) -PathType Leaf)) { throw "Missing prerequisite agents\$file." }
+$deploymentRoot = Join-Path $repoRoot 'deployment'
+$infraRoot = Join-Path $deploymentRoot 'infra'
+$packageScript = Join-Path $PSScriptRoot 'package_foundry.ps1'
+foreach ($file in @('deployment\azure.yaml', 'mcp_servers\host\Dockerfile',
+    'deployment\infra\bootstrap.bicep', 'deployment\infra\app.bicep', 'scripts\package_foundry.ps1')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $file) -PathType Leaf)) { throw "Missing prerequisite $file." }
 }
 foreach ($tool in @('az', 'azd')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing prerequisite: $tool must already be installed and authenticated (no automatic installation or login)." }
@@ -211,27 +270,35 @@ foreach ($name in @($ContainerEnvironmentName, $IdentityName, $WorkspaceName, $V
         throw 'Environment, identity, workspace and virtual network names must be 2..64 alphanumeric/hyphen characters.'
     }
 }
-$services = @('approve-workspace', 'discover-formats', 'extract-metadata', 'classify-data', 'account-failures', 'persist-inventory', 'review-inventory')
 Write-Host "PLAN: subscription=$SubscriptionId tenant=$TenantId resourceGroup=$ResourceGroupName location=$Location"
 Write-Host "Create/update: ACR=$RegistryName (Basic, admin disabled), Azure Files=$StorageAccountName/$FileShareName ($ShareQuotaGiB GiB, read-only mount)"
 Write-Host "Create/update: PostgreSQL=$PostgresServerName (private, B1ms/32GiB), VNet=$VirtualNetworkName, logs=$WorkspaceName, UAMI=$IdentityName"
 Write-Host "Create/update: ACA environment=$ContainerEnvironmentName app=$ContainerAppName (external HTTPS, one replica/worker)"
-Write-Host "Build: repository root via agents\backend\Dockerfile; no source-data upload."
+Write-Host "Build: repository root via mcp_servers\host\Dockerfile; no source-data upload."
 Write-Host "Readiness gate: HTTPS GET /healthz must return 200 within $BackendHealthTimeoutSeconds seconds before deploying agents."
 Write-Host "Adopt existing project=$FoundryProjectId endpoint=$FoundryProjectEndpoint region=$FoundryLocation model=$ModelDeploymentName"
 Write-Host "Deploy independently: $($services -join ', '). Agent authorization entries=$($agents.Count); read-only reader entries=$($readers.Count)."
-Write-Host 'COST: seven hosted agents, always-on ACA, PostgreSQL, ACR, Azure Files, networking and log ingestion are billable; no model is created or invoked.'
+Write-Host 'COST: selected hosted services, always-on ACA, PostgreSQL, ACR, Azure Files, networking and log ingestion are billable; no model is created or invoked.'
 Write-Host "Upload IP exception: $(if ($UploadIpAddress) { $UploadIpAddress } else { 'none (manual upload requires an approved network path)' })."
 if (-not $Deploy) { Write-Host 'Plan only. No Azure calls or filesystem changes performed. Use -Deploy to execute; -WhatIf still prevents Azure calls.'; return }
 if (-not $PostgresPassword -or $PostgresPassword.Length -lt 8 -or $PostgresPassword.Length -gt 128) {
     throw '-Deploy requires -PostgresPassword (SecureString, 8..128 characters).'
 }
 if (-not $IsWindows) { throw 'Secure deployment parameter ACL handling requires Windows PowerShell 7 on Windows.' }
-if (-not $PSCmdlet.ShouldProcess("$SubscriptionId/$ResourceGroupName and $FoundryProjectId", 'Create billable backend infrastructure, build image, deploy seven hosted agents')) { return }
+if (-not $PSCmdlet.ShouldProcess("$SubscriptionId/$ResourceGroupName and $FoundryProjectId", 'Create billable backend infrastructure, build image, deploy selected hosted services')) { return }
 
+foreach ($service in $services) {
+    $relative = if ($service -eq 'exploration-supervisor') { 'swarms\exploration' } else { "agents\$service" }
+    foreach ($file in @('main.py', 'requirements.txt')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "$relative\$file") -PathType Leaf)) {
+            throw "Missing selected service prerequisite: $relative\$file"
+        }
+    }
+}
+& $packageScript -ServiceNames $services -Confirm:$false
+try {
 # Fail before any cloud mutation if the installed CLI lacks required command groups
 # or the already-installed Bicep compiler cannot compile the templates.
-Invoke-Native azd @('ai', 'agent', 'init', '--help')
 Invoke-Native azd @('ai', 'project', 'show', '--help')
 Invoke-Native az @('bicep', 'version', '--only-show-errors')
 foreach ($template in @('bootstrap.bicep', 'app.bicep')) {
@@ -287,7 +354,7 @@ try {
     Invoke-Native az @('deployment', 'group', 'create', '--subscription', "$SubscriptionId", '--resource-group', $ResourceGroupName, '--name', "$NamePrefix-bootstrap", '--template-file', (Join-Path $infraRoot 'bootstrap.bicep'), '--parameters', "@$parameterFile", '--output', 'none', '--only-show-errors')
     $outputs = Invoke-Native az @('deployment', 'group', 'show', '--subscription', "$SubscriptionId", '--resource-group', $ResourceGroupName, '--name', "$NamePrefix-bootstrap", '--query', 'properties.outputs', '--output', 'json', '--only-show-errors') -Json
     $tag = 'backend:' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-    Invoke-Native az @('acr', 'build', '--subscription', "$SubscriptionId", '--resource-group', $ResourceGroupName, '--registry', $RegistryName, '--image', $tag, '--file', 'agents\backend\Dockerfile', '--no-logs', '--output', 'none', '--only-show-errors', $repoRoot)
+    Invoke-Native az @('acr', 'build', '--subscription', "$SubscriptionId", '--resource-group', $ResourceGroupName, '--registry', $RegistryName, '--image', $tag, '--file', 'mcp_servers\host\Dockerfile', '--no-logs', '--output', 'none', '--only-show-errors', $repoRoot)
     $image = "$($outputs.registryLoginServer.value)/$tag"
     $databaseUrl = 'postgresql+psycopg://{0}:{1}@{2}:5432/{3}?sslmode=require' -f
         [uri]::EscapeDataString($PostgresAdministrator), [uri]::EscapeDataString($plainPassword),
@@ -316,9 +383,9 @@ finally {
 
 Wait-BackendReady -BackendUrl ([uri]$appOutputs.backendUrl.value)
 
-Push-Location $agentRoot
+Push-Location $deploymentRoot
 try {
-    if (-not (Test-Path -LiteralPath (Join-Path $agentRoot ".azure\$EnvironmentName\.env"))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $deploymentRoot ".azure\$EnvironmentName\.env"))) {
         Invoke-Native azd @('env', 'new', $EnvironmentName, '--subscription', $projectSubscription, '--location', $FoundryLocation, '--no-prompt')
     }
     $envValues = [ordered]@{
@@ -331,20 +398,26 @@ try {
         OSDU_BACKEND_URL = $appOutputs.backendUrl.value
         OSDU_BACKEND_SCOPE = $BackendScope
     }
+    if ($endpointJson) {
+        $envValues.OSDU_AGENT_ENDPOINTS_JSON = $endpointJson
+        $envValues.OSDU_SWARM_CONCURRENCY = "$SwarmConcurrency"
+        $envValues.OSDU_ALLOW_INVENTORY_WRITES = if ($PermitInventoryWrites) { 'true' } else { 'false' }
+    }
     foreach ($entry in $envValues.GetEnumerator()) {
         Invoke-Native azd @('env', 'set', $entry.Key, $entry.Value, '-e', $EnvironmentName, '--no-prompt')
     }
-    Invoke-Native azd @('ai', 'agent', 'init', '-t', 'azure.yaml', '--project-id', $FoundryProjectId, '--model-deployment', $ModelDeploymentName, '-e', $EnvironmentName, '--no-prompt')
     foreach ($service in $services) {
         Write-Host "Deploying hosted Foundry service: $service"
         Invoke-Native azd @('deploy', $service, '-e', $EnvironmentName, '--no-prompt')
     }
 }
 finally { Pop-Location }
+}
+finally { & $packageScript -ServiceNames $services -Clean -Confirm:$false }
 
 Write-Host "Backend URL: $($appOutputs.backendUrl.value)"
 Write-Host "Backend resource: $($appOutputs.backendResourceId.value)"
 Write-Host "Source share: $StorageAccountName/$FileShareName; place files below Data manually."
-Write-Host "Foundry environment: $EnvironmentName; seven service-specific names, versions and endpoints are recorded by azd in agents\.azure\$EnvironmentName."
+Write-Host "Foundry environment: $EnvironmentName; selected service-specific names, versions and endpoints are recorded by azd in deployment\.azure\$EnvironmentName."
 Write-Host 'Next: obtain and verify each agent service principal object ID, then run configure_foundry_access.ps1. Do NOT substitute the project identity.'
 Write-Host 'No model invocation or source upload was performed. GET /runs requires an explicitly allowlisted reader identity.'
